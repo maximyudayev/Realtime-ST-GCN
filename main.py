@@ -1,33 +1,66 @@
-#!/usr/bin/env python
+import torch
+from model import Trainer
+from batch_gen import BatchGenerator
+import os
 import argparse
-import sys
+import random
 
-# torchlight
-import torchlight
-from torchlight import import_class
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+seed = 1538574472
+random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+torch.backends.cudnn.deterministic = True
 
-if __name__ == '__main__':
+parser = argparse.ArgumentParser()
+parser.add_argument('--action', default='train')
+parser.add_argument('--dataset', default="fog")
 
-    parser = argparse.ArgumentParser(description='Processor collection')
+args = parser.parse_args()
 
-    # region register processor yapf: disable
-    processors = dict()
-    processors['recognition'] = import_class('processor.recognition.REC_Processor')
-    processors['demo_old'] = import_class('processor.demo_old.Demo')
-    processors['demo'] = import_class('processor.demo_realtime.DemoRealtime')
-    processors['demo_offline'] = import_class('processor.demo_offline.DemoOffline')
-    #endregion yapf: enable
+num_stages = 1
+num_layers_PG = 10
+num_layers_RF = 10
+num_f_maps = 64
+features_dim = 6
+bz = 16
+lr = 0.0005
+num_epochs = 100
+dil = [1,2,4,8,16,32,64,128,256,512]
 
-    # add sub-parser
-    subparsers = parser.add_subparsers(dest='processor')
-    for k, p in processors.items():
-        subparsers.add_parser(k, parents=[p.get_parser()])
+# use the full temporal resolution @ 100fps
+sample_rate = 1
 
-    # read arguments
-    arg = parser.parse_args()
+for i in range(1,2):
+    print("Training subject: " + str(i))
+    vid_list_file = "C:\\Users\\u0118546\\OneDrive - KU Leuven\\Max\\model\\data\\" + args.dataset + "/splits_loso_validation/train.split" + str(i) + ".bundle"
+    vid_list_file_tst = "C:\\Users\\u0118546\\OneDrive - KU Leuven\\Max\\model\\data\\" + args.dataset + "/splits_loso_validation/test.split" + str(i) + ".bundle"
+    features_path = "C:\\Users\\u0118546\\OneDrive - KU Leuven\\Max\\model\\data\\" + args.dataset + "/features7/"
+    gt_path = "C:\\Users\\u0118546\\OneDrive - KU Leuven\\Max\\model\\data\\" + args.dataset + "/groundTruth_/"
 
-    # start
-    Processor = processors[arg.processor]
-    p = Processor(sys.argv[2:])
+    mapping_file = "C:\\Users\\u0118546\\OneDrive - KU Leuven\\Max\\model\\data\\" + args.dataset + "/mapping.txt"
 
-    p.start()
+    model_dir = "./models/"+args.dataset+"/split_"+str(i)
+    results_dir = "./results/"+args.dataset+"/split_"+str(i)
+
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+    if not os.path.exists(results_dir):
+        os.makedirs(results_dir)
+
+    file_ptr = open(mapping_file, 'r')
+    actions = file_ptr.read().split('\n')[:-1]
+    file_ptr.close()
+    actions_dict = dict()
+    for a in actions:
+        actions_dict[a.split()[1]] = int(a.split()[0])
+
+    num_classes = len(actions_dict)
+    trainer = Trainer(dil, num_layers_RF, num_stages, num_f_maps, features_dim, num_classes)
+    if args.action == "train":
+        batch_gen = BatchGenerator(num_classes, actions_dict, gt_path, features_path, sample_rate)
+        batch_gen.read_data(vid_list_file)
+        trainer.train(model_dir, batch_gen, num_epochs=num_epochs, batch_size=bz, learning_rate=lr, device=device)
+
+    if args.action == "predict":
+        trainer.predict(model_dir, results_dir, features_path, vid_list_file_tst, num_epochs, actions_dict, device, sample_rate)
