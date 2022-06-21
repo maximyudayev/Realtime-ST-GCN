@@ -1,0 +1,28 @@
+#!/bin/bash -l
+#PBS -A hpcinfo_training
+#PBS -l nodes=1:ppn=36:gpus=8:cascadelake       ## (1/2) Full Cascadelake x8 V100 GPU node (requires 4 cores per gpu)
+#PBS -l partition=gpu                           ## GPU partition
+#PBS -l pmem=20gb                               ## Cascadelake GPU nodes have larger memory (768GB)
+#PBS -l walltime=03:00:00
+#PBS -N st_gcn_training
+#PBS -o debug/stdout.$PBS_JOBNAME.$PBS_JOBID
+#PBS -e debug/stderr.$PBS_JOBNAME.$PBS_JOBID
+#PBS -m bae
+#PBS -M maxim.yudayev@kuleuven.be
+
+# Change directory to location from which task was submitted to queue: $VSC_DATA/...
+cd $PBS_O_WORKDIR
+# Purge all existing software packages
+module purge
+
+# TODO: Install needed packages and activate environment
+
+source activate rt-st-gcn 2> /dev/null
+if [ $? -ne 0 ]
+then
+    (>&2 echo '### [ERR]: conda environment not sourced successfully (.pbs)')
+fi
+
+(>&2 echo 'starting computation')
+# Execute and time the script, use the SCRATCH partition as script argument
+time python ../main.py $VSC_SCRATCH/data

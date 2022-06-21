@@ -3,13 +3,75 @@ Correct implementation of ST-GCN inline with the original paper's proposed formu
 
 ## TODO
 - [x] Implement ST-GCN correctly to the paper's spec (but in RT variant), using basic differentiable tensor operators and cutting out messy Modules combination (stacked GCN + TCN).
+- [x] Validate the network (tensor dimension changes) manually by chaining PyTorch operators.
+- [x] Write data preparation and loading backend for out-of-core big data files.
 - [ ] Validate the network (tensor dimension changes) on a realtime task and on a batch task.
-- [ ] Add ST-GCN eloborate explanatory document to the repository.
-- [ ] Quantize the model with 8-bit dynamic fixed point technique.
+- [ ] Write a script to leverage [KU Leuven HPC](https://www.vscentrum.be/) infrastructure for the PyTorch workflow in a simple automated process that originates on the local machine.
+- [ ] Add support for 2 FIFO latency variants.
+- [ ] Add support for frame buffered batch processing.
+- [ ] Quantize the model with the 8-bit dynamic fixed-point technique.
 - [ ] Compare correct adapted quantized and floating-point models against the original floating-point baseline.
+- [ ] Write a corrective review article on [Yan et al. (2018)](https://arxiv.org/abs/1801.07455) in NeurIPS, CVPR (origin of ST-GCN), or ICCV.
+- [ ] Add ST-GCN eloborate explanatory document to the repository (or link to the preprint article).
 - [ ] Do design space exploration of the network parameters on the adapted network for software-hardware co-design of an action segmentation hardware accelerator.
+- [ ] Do transfer learning for freezing-of-gait (FOG) prediction.
 
 > **Spatial Temporal Graph Convolutional Networks for Skeleton-Based Action Recognition**, Sijie Yan, Yuanjun Xiong and Dahua Lin, AAAI 2018. [[Arxiv Preprint]](https://arxiv.org/abs/1801.07455)
+
+## Directory Tree[^1]
+```
+root/
+├── README.md
+├── ISSUE_TEMPLATE.md
+├── LICENSE
+├── .gitignore
+├── main.py
+├── model.py
+├── models/
+│   ├── proposed/
+│   │   ├── utils/
+│   │   │   └── graph.py
+│   │   ├── st_gcn.py
+│   │   └── test_tensor_dim.py
+│   └── original/
+│       ├── utils/
+│       │   ├── graph.py
+│       │   └── tgcn.py
+│       └── st_gcn.py
+├── pretrained_models/
+├── data/
+│   ├── kinetics/
+│   │   └── label_name.txt
+│   └── ntu_rgb_d/
+│       ├── xsub/
+│       ├── xview/
+│       └── label_name.txt
+├── data_prep/
+│   ├── dataset.py
+│   ├── batch_gen.py
+│   └── label_eval.py
+├── vsc/
+│   ├── st_gcn_gpu_debug.pbs
+│   ├── st_gcn_gpu.pbs
+│   ├── st_gcn_gpu_bigmem.pbs
+│   └── vsc_cheatsheet.md
+└── tools/
+    ├── get_models.sh
+    └── get_data.sh
+```
+[^1]: Data and pretrained models directories are not tracked by the repository and must be downloaded from the source. Refer to the [Data section](#data).
+
+[^2]: Kinetics dataset, 400 action classes, dimensions:
+  Train - (240436, 3, 300, 18, 2).
+  Validation - (19796, 3, 300, 18, 2).
+
+[^3]: NTU-RGB-D, 60 action classes, subject dataset dimensions:
+  Train - (40091, 3, 300, 25, 2)
+  Validation - (16487, 3, 300, 25, 2)
+
+[^4]: NTU-RGB-D, 60 action classes, view dataset dimensions:
+  Train - (37646, 3, 300, 25, 2)
+  Validation - (18932, 3, 300, 25, 2)
 
 ## Installation
 ### Environment
@@ -20,71 +82,34 @@ conda activate rt-st-gcn
 git clone https://github.com/maximyudayev/Realtime-ST-GCN.git
 ```
 
+### Data
+**Kinetics-skeleton** and **NTU RGB+D** data preprocessed by Yan et al. (2018) can be obtained for reproducible apples-to-apples benchmarking of the models. The datasets can be downloaded by running the script:
+```shell
+./tools/get_data.sh
+```
+You can also download the datasets manually from their [Google Drive](https://drive.google.com/open?id=103NOL9YYZSW1hLoWmYnv5Fs8mK-Ij7qb) and extract them into ```./data```.
+
+Otherwise, for processing raw data by yourself, or to port new dataset to the model in the format it expects, please refer to the [original author's guide](https://github.com/yysijie/st-gcn/blob/master/OLD_README.md).
+
+New datasets should match the directory structure and summary/configuration files expected by the model and automated scripts to setup and run without errors:
+```
+new_dataset/
+├── label_name.txt      (output classes)
+├── skeleton_graph.txt  (list of joint tuples)
+├── train_data.npy
+├── train_label.pkl
+├── val_data.npy
+└── val_label.pkl
+```
+
 ### Pretrained Model
-We provided the pretrained model weithts of our **ST-GCN**. The model weights can be downloaded by running the script
+We provided the pretrained model weithts of our **ST-GCN** models. The model weights can be downloaded by running the script:
 ```shell
 ./tools/get_models.sh
 ```
-You can also download the models manually from [GoogleDrive](https://www.youtube.com/watch?v=BBJa32lCaaY) and put them into ```./models```.
+You can also download the models manually from [Google Drive](https://www.youtube.com/watch?v=BBJa32lCaaY) and put them into ```./pretrained_models```.
 
 <!-- 
-## Demo
-To visualize how ST-GCN exploit local correlation and local pattern, we compute the feature vector magnitude of each node in the final spatial temporal graph, and overlay them on the original video. **Openpose** should be ready for extracting human skeletons from videos. The skeleton based action recognition results is also shwon thereon.
-
-You can use the following commands to run the demo.
-
-```shell
-# with offline pose estimation
-python main.py demo_offline [--video ${PATH_TO_VIDEO}] [--openpose ${PATH_TO_OPENPOSE}]
-
-# with realtime pose estimation
-python main.py demo [--video ${PATH_TO_VIDEO}] [--openpose ${PATH_TO_OPENPOSE}]
-```
-
-Optional arguments:
-
-- `PATH_TO_OPENPOSE`: It is required if the Openpose Python API is not in `PYTHONPATH`.
-- `PATH_TO_VIDEO`: Filename of the input video.
-
-The realtime demo also support to load video streams from camera source by
-```
-python main.py demo --video camera
-```
-
-Openpose Python API is required in the above demos.
-
-## Data Preparation
-
-We experimented on two skeleton-based action recognition datasts: **Kinetics-skeleton** and **NTU RGB+D**.
-Before training and testing, for convenience of fast data loading,
-the datasets should be converted to proper file structure. 
-You can download the pre-processed data from 
-[GoogleDrive](https://drive.google.com/open?id=103NOL9YYZSW1hLoWmYnv5Fs8mK-Ij7qb)
-and extract files with
-``` 
-cd st-gcn
-unzip <path to st-gcn-processed-data.zip>
-```
-Otherwise, for processing raw data by yourself,
-please refer to below guidances.
-
-#### Kinetics-skeleton
-[Kinetics](https://deepmind.com/research/open-source/open-source-datasets/kinetics/) is a video-based dataset for action recognition which only provide raw video clips without skeleton data. Kinetics dataset include To obatin the joint locations, we first resized all videos to the resolution of 340x256 and converted the frame rate to 30 fps.  Then, we extracted skeletons from each frame in Kinetics by [Openpose](https://github.com/CMU-Perceptual-Computing-Lab/openpose). The extracted skeleton data we called **Kinetics-skeleton**(7.5GB) can be directly downloaded from [GoogleDrive](https://drive.google.com/open?id=1SPQ6FmFsjGg3f59uCWfdUWI-5HJM_YhZ) or [BaiduYun](https://pan.baidu.com/s/1dwKG2TLvG-R1qeIiE4MjeA#list/path=%2FShare%2FAAAI18%2Fkinetics-skeleton&parentPath=%2FShare).
-
-After uncompressing, rebuild the database by this command:
-```
-python tools/kinetics_gendata.py --data_path <path to kinetics-skeleton>
-```
-
-#### NTU RGB+D
-NTU RGB+D can be downloaded from [their website](http://rose1.ntu.edu.sg/datasets/actionrecognition.asp).
-Only the **3D skeletons**(5.8GB) modality is required in our experiments. After that, this command should be used to build the database for training or evaluation:
-```
-python tools/ntu_gendata.py --data_path <path to nturgbd+d_skeletons>
-```
-where the ```<path to nturgbd+d_skeletons>``` points to the 3D skeletons modality of NTU RGB+D dataset you download.
-
-
 ## Testing Pretrained Models
 
 ### Evaluation

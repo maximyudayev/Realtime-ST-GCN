@@ -1,0 +1,29 @@
+#!/bin/bash -l
+#PBS -A hpcinfo_training
+#PBS -l nodes=1:ppn=36:gpus=4:skylake           ## (1/1) Debug Skylake 4x P100 GPU node (requires 9 cores per gpu)
+#PBS -l partition=gpu                           ## GPU partition
+#PBS -l pmem=5gb                                ## Debug Skylake GPU node has thin node's memory (192GB)
+#PBS -l qos=debugging                           ## Debug specifier
+#PBS -l walltime=00:30:00                       ## Debug jobs limited to 30 min
+#PBS -N st_gcn_debug
+#PBS -o debug/stdout.$PBS_JOBNAME.$PBS_JOBID
+#PBS -e debug/stderr.$PBS_JOBNAME.$PBS_JOBID
+#PBS -m bae
+#PBS -M maxim.yudayev@kuleuven.be
+
+# Change directory to location from which task was submitted to queue: $VSC_DATA/...
+cd $PBS_O_WORKDIR
+# Purge all existing software packages
+module purge
+
+# TODO: Install needed packages and activate environment
+
+source activate rt-st-gcn 2> /dev/null
+if [ $? -ne 0 ]
+then
+    (>&2 echo '### [ERR]: conda environment not sourced successfully (.pbs)')
+fi
+
+(>&2 echo 'starting computation')
+# Execute and time the script, use the SCRATCH partition as script argument
+time python ../main.py $VSC_SCRATCH/data
