@@ -3,5 +3,8 @@
 __pycache__
 
 # exact directories
-data/
+data/*
 pretrained_models/
+
+# exceptions
+!data/skeletons

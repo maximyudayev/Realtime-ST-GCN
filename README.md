@@ -1,14 +1,17 @@
 # Realtime ST-GCN
 Correct implementation of ST-GCN inline with the original paper's proposed formulae, and adapted to realtime processing.
 
+Classes are decoupled for modularity and readability, with separation of concern dictated by the user's JSON configuration files or CLI arguments.
+
 ## TODO
 - [x] Implement ST-GCN correctly to the paper's spec (but in RT variant), using basic differentiable tensor operators and cutting out messy Modules combination (stacked GCN + TCN).
 - [x] Validate the network (tensor dimension changes) manually by chaining PyTorch operators.
 - [x] Write data preparation and loading backend for out-of-core big data files.
-- [ ] Validate the network (tensor dimension changes) on a realtime task and on a batch task.
-- [ ] Write a script to leverage [KU Leuven HPC](https://www.vscentrum.be/) infrastructure for the PyTorch workflow in a simple automated process that originates on the local machine.
+- [x] Write a script to leverage [KU Leuven HPC](https://www.vscentrum.be/) infrastructure for the PyTorch workflow in a simple automated process that originates on the local machine.
+- [x] Add support for frame buffered realtime processing.
+- [x] Validate the code.
+- [ ] Train the models.
 - [ ] Add support for 2 FIFO latency variants.
-- [ ] Add support for frame buffered batch processing.
 - [ ] Quantize the model with the 8-bit dynamic fixed-point technique.
 - [ ] Compare correct adapted quantized and floating-point models against the original floating-point baseline.
 - [ ] Write a corrective review article on [Yan et al. (2018)](https://arxiv.org/abs/1801.07455) in NeurIPS, CVPR (origin of ST-GCN), or ICCV.
@@ -18,7 +21,7 @@ Correct implementation of ST-GCN inline with the original paper's proposed formu
 
 > **Spatial Temporal Graph Convolutional Networks for Skeleton-Based Action Recognition**, Sijie Yan, Yuanjun Xiong and Dahua Lin, AAAI 2018. [[Arxiv Preprint]](https://arxiv.org/abs/1801.07455)
 
-## Directory Tree[^1]
+## Directory Tree
 ```
 root/
 ├── README.md
@@ -26,13 +29,14 @@ root/
 ├── LICENSE
 ├── .gitignore
 ├── main.py
-├── model.py
+├── processor.py
 ├── models/
 │   ├── proposed/
 │   │   ├── utils/
+│   │   │   ├── test_graph.py
 │   │   │   └── graph.py
 │   │   ├── st_gcn.py
-│   │   └── test_tensor_dim.py
+│   │   └── test_stg_gcn.py
 │   └── original/
 │       ├── utils/
 │       │   ├── graph.py
@@ -41,14 +45,23 @@ root/
 ├── pretrained_models/
 ├── data/
 │   ├── kinetics/
-│   │   └── label_name.txt
-│   └── ntu_rgb_d/
-│       ├── xsub/
-│       ├── xview/
-│       └── label_name.txt
+│   │   └── actions.txt
+│   ├── ntu_rgb_d/
+│   │   ├── xsub/
+│   │   ├── xview/
+│   │   └── actions.txt
+│   └── skeletons/
+│       ├── openpose.json
+│       └── ntu-rgb+d.json
+├── config/
+│   ├── kinetics/
+│   │   └── config.json
+│   ├── ntu_rgb_d/
+│   │   └── config.json
+│   ├── default_local.json
+│   └── default_vsc.json
 ├── data_prep/
 │   ├── dataset.py
-│   ├── batch_gen.py
 │   └── label_eval.py
 ├── vsc/
 │   ├── st_gcn_gpu_debug.pbs
@@ -59,17 +72,17 @@ root/
     ├── get_models.sh
     └── get_data.sh
 ```
-[^1]: Data and pretrained models directories are not tracked by the repository and must be downloaded from the source. Refer to the [Data section](#data).
+Data and pretrained models directories are not tracked by the repository and must be downloaded from the source. Refer to the [Data section](#data).
 
-[^2]: Kinetics dataset, 400 action classes, dimensions:
+Kinetics dataset, 400 action classes, dimensions:
   Train - (240436, 3, 300, 18, 2).
   Validation - (19796, 3, 300, 18, 2).
 
-[^3]: NTU-RGB-D, 60 action classes, subject dataset dimensions:
+NTU-RGB-D, 60 action classes, subject dataset dimensions:
   Train - (40091, 3, 300, 25, 2)
   Validation - (16487, 3, 300, 25, 2)
 
-[^4]: NTU-RGB-D, 60 action classes, view dataset dimensions:
+NTU-RGB-D, 60 action classes, view dataset dimensions:
   Train - (37646, 3, 300, 25, 2)
   Validation - (18932, 3, 300, 25, 2)
 
@@ -91,15 +104,26 @@ You can also download the datasets manually from their [Google Drive](https://dr
 
 Otherwise, for processing raw data by yourself, or to port new dataset to the model in the format it expects, please refer to the [original author's guide](https://github.com/yysijie/st-gcn/blob/master/OLD_README.md).
 
-New datasets should match the directory structure and summary/configuration files expected by the model and automated scripts to setup and run without errors:
+New datasets should match the data directory structure, provide configuration and skeleton file, which are expected by the model and the automated scripts to setup and run without errors. Make sure to match these prerequisites:
 ```
-new_dataset/
-├── label_name.txt      (output classes)
-├── skeleton_graph.txt  (list of joint tuples)
-├── train_data.npy
-├── train_label.pkl
-├── val_data.npy
-└── val_label.pkl
+...
+├── data/
+│   ...
+│   ├── new_dataset/
+│   │   ├── actions.txt       (output classes)
+│   │   ├── train_data.npy
+│   │   ├── train_label.pkl
+│   │   ├── val_data.npy
+│   │   └── val_label.pkl
+│   └── skeletons/
+│       ...
+│       └── new_skeleton.json (skeleton description)
+...
+├── config/
+│   ...
+│   └── new_dataset/
+│       └── config.json       (script configuration)
+...
 ```
 
 ### Pretrained Model

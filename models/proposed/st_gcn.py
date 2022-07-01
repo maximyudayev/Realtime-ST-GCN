@@ -1,124 +1,166 @@
 import torch
 import torch.nn as nn
-from utils.graph import Graph
+from models.proposed.utils.graph import Graph
 
-class Model(nn.Module):
-    r"""Spatial temporal graph convolutional network of Yan, et al. (2018), adapted for realtime.
+class RTSTGCN(nn.Module):
+    """Spatial temporal graph convolutional network of Yan, et al. (2018), adapted for realtime.
     (https://arxiv.org/abs/1801.07455).
 
+    Implements both, realtime and buffered realtime logic in the same source. 
+    At runtime, the model looks at the L-dimension of the tensor to make the predictions.
+    This enforces computations are numerically correct if the frame buffer is not completely full
+    (e.g. the last minibatch of frames from a recording if ``capture_length % buffer != 0``).
+    
+    All arguments are positional to enforce separation of concern and pass the responsibility for
+    model configuration up in the chain to the envoking program (config file).
+
     TODO:
-        ``1.`` add logic for variation in FIFO latency
+        ``1.`` add logic for variation in FIFO latency.
 
-        ``2.`` enable batch processing (N frames buffered and processed in batch)
-
-        ``3.`` move all hardcoded parameters into configuration files for manageability and scalability
-
-    Args:
-        input_dim                   (int): Number of input sample channels/features
-        
-        num_classes                 (int): Number of output classification classes
-        
-        num_joints                  (int): Number of nodes/joints in the skeleton 
-        
-        kernel_size                 (int, optional): Temporal kernel size Gamma. Default: ``9``
-        
-        edge_importance_weighting   (bool, optional): If ``True``, adds a learnable
-            importance weighting to the edges of the graph. Default: ``True``
-        
-        fifo_latency                (bool, optional): If ``True``, residual connection adds 
-            ``x_{t}`` frame to ``y_{t}`` (which adds ``ceil(kernel_size/2)`` latency), 
-            adds ``x_{t}`` frame to ``y_{t-ceil(kernel_size/2)}`` otherwise. Default: ``False``
-        
-        dropout                     ([int], optional): Array of dropout parameters, one per ST-GCN layer.
-            Default: ``9*[0.5]``
-
-        graph_args                  (dict, optional): Dictionary with parameters for skeleton Graph.
-            Default: ``{'layout': 'openpose', 'strategy': 'spatial'}``
+        ``2.`` write more elaborate class description about the design choices and working principle.
 
     Shape:
-        - Input[0]:    :math:`(N, C_{in}, V)`
-        - Output[0]:   :math:`(C_{out})` 
+        - Input[0]:    :math:`(N, C_{in}, L, V)`.
+        - Output[0]:   :math:`(N, C_{out}, L)`. 
         
         where
-            :math:`N` is a batch size,
-            :math:`C_{in}` is the number of input channels (features),
-            :math:`C_{out}` is the number of classification classes,
+            :math:`N` is a batch size.
+
+            :math:`C_{in}` is the number of input channels (features).
+
+            :math:`C_{out}` is the number of classification classes.
+
+            :math:`L` is the number of frames (capture length).
+
             :math:`V` is the number of graph nodes.
     """
 
-    def __init__(self, 
-                input_dim, 
-                num_classes, 
-                num_joints,
-                kernel=[9],
-                edge_importance_weighting=True,
-                fifo_latency=False,
-                dropout=9*[0.5],
-                graph_args = {'layout': 'openpose', 'strategy': 'spatial'},
-                **kwargs):
+    def __init__(
+        self,
+        in_feat: int,
+        num_classes: int,
+        kernel: list[int],
+        importance: bool,
+        latency: bool,
+        layers: list[int],
+        in_ch: list[list[int]],
+        out_ch: list[list[int]],
+        stride: list[list[int]],
+        residual: list[list[int]],
+        dropout: list[list[float]],
+        graph: dict,
+        strategy: str,
+        **kwargs) -> None:
+        """
+        Args:
+            in_feat : ``int`` 
+                Number of input sample channels/features.
+            
+            num_classes : ``int``
+                Number of output classification classes.
+            
+            kernel : ``list[int]``
+                Temporal kernel size Gamma.
+            
+            importance : ``bool``
+                If ``True``, adds a learnable importance weighting to the edges of the graph.
+            
+            latency : ``bool``
+                If ``True``, residual connection adds 
+                ``x_{t}`` frame to ``y_{t}`` (which adds ``ceil(kernel_size/2)`` latency), 
+                adds ``x_{t}`` frame to ``y_{t-ceil(kernel_size/2)}`` otherwise.
+            
+            layers : ``list[int]``
+                Array of number of ST-GCN layers, oner per stage.
+
+            in_ch : ``list[list[int]]``
+                2D array of input channel numbers, one per stage per ST-GCN layer.
+
+            out_ch : ``list[list[int]]``
+                2D array of output channel numbers, one per stage per ST-GCN layer.
+
+            stride : ``list[list[int]]``
+                2D array of temporal stride sizes, one per stage per ST-GCN layer.
+
+            residual : ``list[list[int]]``
+                2D array of residual connection flags, one per stage per ST-GCN layer.
+
+            dropout : ``list[list[float]]``
+                2D array of dropout parameters, one per stage per ST-GCN layer.
+
+            graph : ``dict`` 
+                Dictionary with parameters for skeleton Graph.
+
+            strategy : ``str``
+                Type of Graph partitioning strategy.
+        """
+
         super().__init__()
 
+        # verify that parameter dimensions match (correct number of layers/parameters per stage)
+        for i, layers_in_stage in enumerate(layers):
+            assert((len(in_ch[i]) == layers_in_stage) and
+                    (len(out_ch[i]) == layers_in_stage) and
+                    (len(stride[i]) == layers_in_stage) and
+                    (len(residual[i]) == layers_in_stage),
+                ("Incorrect number of constructor parameters in the ST-GCN stage ModuleList.\n"
+                "Expected for stage {0}: {1}, got: ({2}, {3}, {4}, {5})")
+                .format(
+                    i, 
+                    layers[i], 
+                    len(in_ch[i]), 
+                    len(out_ch[i]), 
+                    len(stride[i]), 
+                    len(residual[i])))
+
         self.num_classes = num_classes
-        self.graph = Graph(**graph_args)
-        # adjacency matrix must be returned as (P, V, V)
+        num_joints = graph['num_node']
+
+        # register the normalized adjacency matrix as a non-learnable saveable parameter 
+        self.graph = Graph(strategy=strategy, **graph)
         A = torch.tensor(self.graph.A, dtype=torch.float32, requires_grad=False)
         self.register_buffer('A', A)
 
-        ########### TODO: remove after verification ##########
-        num_partitions = 3
-        assert(
-            A.shape == (num_partitions, num_joints, num_joints),
-            "Unexpected Adjacency tensor dimension in Model.\n" +
-            f"Expected: {(num_partitions, num_joints, num_joints)}, got: {A.shape}")
-        ######################################################
-
         # input capture normalization
-        self.bn_in = nn.BatchNorm1d(input_dim)
+        # (N,C,L,V)
+        self.bn_in = nn.BatchNorm2d(in_feat)
         
         # fcn for feature remapping of input to the network size
-        self.fcn_in = nn.Conv2d(in_channels=input_dim, out_channels=64, kernel_size=1)
+        self.fcn_in = nn.Conv2d(in_channels=in_feat, out_channels=in_ch[0][0], kernel_size=1)
         
         # stack of ST-GCN layers
-        layers = [9]
-        in_ch = [4*[64]+3*[128]+2*[256]]
-        out_ch = [3*[64]+3*[128]+3*[256]]
-        stride = [[1, 1, 1, 2, 1, 1, 2, 1, 1]]
-        residual = [[False]+8*[True]]
-
-        for i in layers:
-            assert(len(in_ch[i]) == layers[i] &
-                    len(out_ch[i]) == layers[i] &
-                    len(stride[i]) == layers[i] &
-                    len(residual[i]) == layers[i],
-                "Incorrect number of constructor parameters in the ST-GCN stage ModuleList.\n" +
-                f"Expected all: {layers[i]}, got: {(len(in_ch[i]), len(out_ch[i]), len(stride[i]), len(residual[i]))}")
-
-        stack = [[ST_GCN(
+        stack = [[STGCNLayer(
+                    num_joints=num_joints,
+                    fifo_latency=latency,
                     in_channels=in_ch[i][j],
                     out_channels=out_ch[i][j],
-                    kernel_size=kernel[i][j],
-                    num_joints=num_joints,
+                    kernel_size=kernel[i],
                     stride=stride[i][j],
-                    residual=residual[i][j],
-                    fifo_latency=fifo_latency,
-                    dropout=dropout[i][j])
-                for j in range(layers[i])] for i in layers]
-        self.st_gcn = nn.ModuleList(stack)
+                    num_partitions=A.shape[0],
+                    residual=not not residual[i][j],
+                    dropout=dropout[i][j],
+                    **kwargs)
+                for j in range(layers_in_stage)] 
+                for i, layers_in_stage in enumerate(layers)]
+        # flatten into a single sequence of layers after parameters were used to construct
+        # (done like that to make config files more readable)
+        self.st_gcn = nn.ModuleList([module for sublist in stack for module in sublist])
         
         # global pooling
-        self.avg_pool = nn.AvgPool2d(kernel_size=(num_joints, 1))
+        # converts (N,C,L,V) -> (N,C,L,1)
+        self.avg_pool = nn.AvgPool2d(kernel_size=(1, num_joints))
 
         # fcn for prediction
-        self.fcn_out = nn.Conv2d(in_channels=256, out_channels=num_classes, kernel_size=1)
+        # maps C to num_classes channels: (N,C,L,1) -> (N,F,L,1) 
+        self.fcn_out = nn.Conv2d(in_channels=out_ch[-1][-1], out_channels=num_classes, kernel_size=1)
 
-        # edge importance weighting matrices (each layer, separate weighting)
-        if edge_importance_weighting:
-            self.edge_importance = nn.ParameterList([
-                nn.Parameter(torch.ones(num_joints, num_joints))
-                for _ in self.st_gcn
-            ])
+        # learnable edge importance weighting matrices (each layer, separate weighting)
+        if importance:
+            self.edge_importance = nn.ParameterList(
+                [nn.Parameter(torch.ones(num_joints, num_joints, requires_grad=True)) for _ in self.st_gcn])
         else:
             self.edge_importance = [1] * len(self.st_gcn)
+
 
     def forward(self, x):
         # normalize the input frame
@@ -138,78 +180,97 @@ class Model(nn.Module):
         # remap the feature vector to class predictions
         x = self.fcn_out(x)
 
-        # unroll the tensor into an array
-        return x.view(self.num_classes)
+        # removes the last dimension (node dimension) of size 1: (N,C,L,1) -> (N,C,L)
+        return x.squeeze(-1)
 
-class ST_GCN(nn.Module):
-    r"""Applies a spatial temporal graph convolution over an input graph sequence.
+
+class STGCNLayer(nn.Module):
+    """Applies a spatial temporal graph convolution over an input graph sequence.
+    
     Each layer has a FIFO to store the corresponding Gamma-sized window of graph frames.
+    All arguments are positional to enforce separation of concern and pass the responsibility for
+    model configuration up in the chain to the envoking program (config file).
 
-    TODO: 
-        ``1.`` add logic for variation in FIFO latency
+    TODO:
+        ``1.`` add logic for variation in FIFO latency.
 
-        ``2.`` validate the logic (due to tensor dimensions) on batch processing (several frames at a time)
-
-    Args:Model()
-        in_channels     (int): Number of input sample channels/features
-        
-        out_channels    (int): Number of channels produced by the convolution
-        
-        kernel_size     (int): Size of the temporal window Gamma
-        
-        num_joints      (int): Number of the joint nodes in the graph 
-        
-        stride          (int, optional): Stride of the temporal reduction. Default: ``1``
-        
-        num_partitions  (int, optional): Number of partitions in selected strategy. Default: ``3`` (spatial partitioning)
-            must correspond to the first dimension of the adjacency matrix (matrices)
-        
-        dropout         (int, optional): Dropout rate of the final output. Default: ``0.5``
-        
-        residual        (bool, optional): If ``True``, applies a residual connection. Default: ``True``
-        
-        fifo_latency    (bool, optional): If ``True``, residual connection adds 
-            ``x_{t}`` frame to ``y_{t}`` (which adds ``ceil(kernel_size/2)`` latency), 
-            adds ``x_{t}`` frame to ``y_{t-ceil(kernel_size/2)}`` otherwise. Default: ``False``
+        ``2.`` write more elaborate class description about the design choices and working principle.
 
     Shape:
-        - Input[0]:     :math:`(N, C_{in}, V)` - Input graph frame
-        - Input[1]:     :math:`(P, V, V)` - Graph adjacency matrix
-        - Output[0]:    :math:`(N, C_{out}, V)` - Output graph frame
+        - Input[0]:     :math:`(N, C_{in}, L, V)` - Input graph frame.
+        - Input[1]:     :math:`(P, V, V)` - Graph adjacency matrix.
+        - Output[0]:    :math:`(N, C_{out}, L, V)` - Output graph frame.
 
         where
-            :math:`N` is the batch size,
-            :math:`C_{in}` is the number of input channels (features),
-            :math:`C_{out}` is the number of output channels (features),
-            :math:`V` is the number of graph nodes,
+            :math:`N` is the batch size.
+            
+            :math:`L` is the buffer size (buffered frames number).
+
+            :math:`C_{in}` is the number of input channels (features).
+
+            :math:`C_{out}` is the number of output channels (features).
+
+            :math:`V` is the number of graph nodes.
+
             :math:`P` is the number of graph partitions.
     """
 
-    def __init__(self,
-                in_channels,
-                out_channels,
-                kernel_size,
-                num_joints,
-                stride=1,
-                num_partitions=3,
-                dropout=0.5,
-                residual=True,
-                fifo_latency=False):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        num_joints: int,
+        stride: int,
+        num_partitions: int,
+        dropout: float,
+        residual: bool,
+        fifo_latency: bool,
+        **kwargs):
+        """
+        Args:
+            in_channels : ``int``
+                Number of input sample channels/features.
+            
+            out_channels : ``int``
+                Number of channels produced by the convolution.
+            
+            kernel_size : ``int``
+                Size of the temporal window Gamma.
+            
+            num_joints : ``int``
+                Number of joint nodes in the graph.
+            
+            stride : ``int``
+                Stride of the temporal reduction.
+            
+            num_partitions : ``int``
+                Number of partitions in selected strategy.
+                Must correspond to the first dimension of the adjacency tensor.
+            
+            dropout : ``float``
+                Dropout rate of the final output.
+            
+            residual : ``bool``
+                If ``True``, applies a residual connection.
+            
+            fifo_latency : ``bool``
+                If ``True``, residual connection adds ``x_{t}`` frame to ``y_{t}`` (which adds ``ceil(kernel_size/2)`` latency), 
+                otherwise adds ``x_{t}`` frame to ``y_{t-ceil(kernel_size/2)}``.
+        """
+        
         super().__init__()
 
         # temporal kernel Gamma is symmetric (odd number)
-        assert len(kernel_size) == 1
-        assert kernel_size[0] % 2 == 1
+        # assert len(kernel_size) == 1
+        assert kernel_size % 2 == 1
 
         self.num_partitions = num_partitions
-        self.stide = stride
-        self.out_channels = out_channels
-        self.fifo_size = 2*kernel_size-1
-
-        ########### TODO: remove after verification ##########
-        # temp saved variables 
         self.num_joints = num_joints
-        ######################################################
+        self.stride = stride
+
+        self.out_channels = out_channels
+        self.fifo_size = stride*(kernel_size-1)+1
         
         # convolution of incoming frame 
         # (out_channels is a multiple of the partition number
@@ -218,14 +279,13 @@ class ST_GCN(nn.Module):
         self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1)
 
         # FIFO for intermediate Gamma graph frames after multiplication with adjacency matrices
-        # (G,P,C,V) - (G)amma, (P)artition, (C)hannels, (V)ertices
-        self.fifo = torch.zeros(self.fifo_size, num_partitions, out_channels, num_joints)
+        # (N,G,P,C,V) - (N)batch, (G)amma, (P)artition, (C)hannels, (V)ertices
+        self.fifo = torch.zeros(kwargs['batch_size'], self.fifo_size, num_partitions, out_channels, num_joints)
         
         # normalization and dropout on main branch
         self.bn_do = nn.Sequential(
             nn.BatchNorm2d(out_channels),
-            nn.Dropout(dropout, inplace=True)
-        )
+            nn.Dropout(dropout, inplace=True))
 
         # residual branch
         if not residual:
@@ -235,66 +295,61 @@ class ST_GCN(nn.Module):
         else:
             self.residual = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1),
-                nn.BatchNorm2d(out_channels)
-            )
+                nn.BatchNorm2d(out_channels))
 
         # activation of branch sum
         self.relu = nn.ReLU(inplace=True)
 
-    def forward(self, x, A):
-        ########### TODO: remove after verification ##########
-        assert(
-            x.shape == (1, self.num_joints, self.in_channels),
-            "Unexpected input tensor dimension in ST-GCN.\n" + 
-            f"Expected: {(1, self.num_joints, self.in_channels)}, got: {x.shape}")
-        assert(
-            A.shape == (self.num_partitions, self.num_joints, self.num_joints),
-            "Unexpected Adjacency tensor dimension in ST-GCN.\n" +
-            f"Expected: {(self.num_partitions, self.num_joints, self.num_joints)}, got: {A.shape}")
-        ######################################################
 
+    def forward(self, x, A):
+        """
+        In case of buffered realtime processing, Conv2D and MMUL are done on the buffered frames,
+        which mimics the kernels reuse mechanism that would be followed in hardware at the expense
+        of extra memory for storing intermediate results.
+
+        TODO:
+            ``1.`` Speed up the for-loop part (buffered realtime setup) by vectorization.
+        """
         # residual branch
         res = self.residual(x)
         
         # spatial convolution of incoming frame (node-wise)
         x = self.conv(x)
-        
-        ########### TODO: remove after verification ##########
-        assert(
-            x.shape == (1, self.out_channels*self.num_partitions, self.num_joints, 1),
-            "Unexpected tensor dimension in ST-GCN after spatial FC.\n" +
-            f"Expected: {(1, self.out_channels*self.num_partitions, self.num_joints, 1)}, got: {x.shape}")
-        ######################################################
 
+        # convert to the expected dimension order and add the partition dimension
         # reshape the tensor for multiplication with the adjacency matrix
         # (convolution output contains all partitions, stacked across the channel dimension)
         # split into separate 4D tensors, each corresponding to a separate partition
         a = torch.split(x, self.out_channels, dim=1)
-        # concatenate these 4D tensors across the batch dimension batch
-        b = torch.cat(a, 0)
+        # concatenate these 4D tensors across the partition dimension
+        b = torch.stack(a, -1)
         # change the dimension order for the correct broadcating of the adjacency matrix
-        # (P,C,V,N) -> (N,P,C,V)
-        c = torch.permute(b, (3,0,1,2))
+        # (N,C,L,V,P) -> (N,L,P,C,V)
+        c = torch.permute(b, (0,2,4,1,3))
         # single multiplication with the adjacency matrices (spatial selective addition, across partitions)
         d = torch.matmul(c, A)
 
-        # push the frame into the FIFO
-        self.fifo = torch.cat((d, self.fifo[:self.fifo_size-1]), 0)
+        # perform temporal accumulation for each of the buffered frames
+        # (portability for buffered_realtime setup, for realtime, the buffer is of size 1)
+        outputs = []
+        for i in range(d.shape[1]):
+            # push the frame into the FIFO
+            self.fifo = torch.cat((d[:,i:i+1], self.fifo[:,:self.fifo_size-1]), 1)
+            
+            # slice the tensor according to the temporal stride size
+            # (if stride is 1, returns the whole tensor itself)
+            e = self.fifo[:,range(0, self.fifo_size, self.stride)]
 
-        # sum temporally and across partitions
-        # (C,H)
-        e = torch.sum(self.fifo, dim=(0,1))
-        # reshape the tensor to the dimensions of the input frame
-        x = torch.permute(e, (1,0))[None,:]
+            # sum temporally and across partitions
+            # (C,H)
+            f = torch.sum(e, dim=(1,2))
+            outputs.append(f)
 
-        ########### TODO: remove after verification ##########
-        assert(
-            x.shape == res.shape,
-            "Tensor dimension mismatch between main and residual branches.\n" +
-            f"Main: {x.shape}, residual: {res.shape}")
-        ######################################################
+        # stack frame-wise tensors into the original length L
+        # [(N,C,V)] -> (N,C,L,V)
+        g = torch.stack(outputs, 2)
 
         # add the branches (main + residual)
-        x = x + res
+        x = g + res
 
         return self.relu(x)

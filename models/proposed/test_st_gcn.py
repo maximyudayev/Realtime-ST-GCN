@@ -1,14 +1,18 @@
 import torch
 
 # Test dimensions
+N = 2
 P = 3
 V = 5
 C = 6
-G = 9
+S = 2
+K = 9
+L = 1
+G = S*(K-1)+1
 D = int(V*(1+V)/2)
 
 # FIFO for internal logic
-fifo = torch.zeros(G,P,C,V)
+fifo = torch.zeros(N,G,P,C,V)
 
 # Makes P V-by-V symmetric adjacency matrices
 A = torch.zeros(P,V,V,dtype=torch.int64)
@@ -28,21 +32,34 @@ for k in range(V):
 t3 = torch.tensor(A[0],dtype=torch.float64)
 t4 = torch.matmul(torch.matmul(t2, t3),t2)
 
-# Mimic output of spatial FC
-a = torch.tensor(range(1*C*P*V*1), dtype=torch.int64)
-a = torch.reshape(a,(1,C*P,V,1))
+# Mimic 1x1 convolution of the input
+
+# Mimic output of spatial FC (Conv2D)
+a = torch.tensor(range(N*C*P*V), dtype=torch.int64)
+a = torch.reshape(a,(N,C*P,L,V))
 
 # Prepare tensor for multiplication with adjacency matrices
 b = torch.split(a,C,dim=1)
-c = torch.cat(b,0)
-d = torch.permute(c,(3,0,1,2))
+c = torch.stack(b,-1)
+d = torch.permute(c,(0,2,4,1,3))
 
 # Multiplication with adjacency matrices -> spatial selective addition
 e = torch.matmul(d,A)
 
-# Updating FIFO contents
-f = torch.cat((e, fifo[:G-1]), 0)
+# perform temporal accumulation for each output frame
+outputs = []
+for i in range(e.shape[1]):
+    # push the frame into the FIFO
+    fifo = torch.cat((e[:,i:i+1], fifo[:,:G-1]), 1)
+    
+    # slice the tensor according to the temporal stride size
+    # (if stride is 1, returns the whole tensor itself)
+    f = fifo[:,range(0, G, S)]
 
-# Temporal reduction and matching to input dimension
-g = torch.sum(f,(0,1))
-h = torch.permute(g,(1,0))[None,:]
+    # sum temporally and across partitions
+    g = torch.sum(f, dim=(1,2))
+    outputs.append(g)
+
+# stack frame-wise tensors into the original length L
+# [(N,C,V)] -> (N,C,L,V)
+h = torch.stack(outputs, 2)

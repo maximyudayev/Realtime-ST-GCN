@@ -1,0 +1,38 @@
+{
+    "model": {
+        "model": "realtime",
+        "strategy": "spatial",
+        "data": "/scratch/leuven/341/vsc34153/rt_st_gcn/data/kinetics",
+        "out": "/scratch/leuven/341/vsc34153/rt_st_gcn/pretrained_models/kinetics",
+        "actions": "/scratch/leuven/341/vsc34153/rt_st_gcn/data/kinetics/actions.txt",
+        "graph": "/scratch/leuven/341/vsc34153/rt_st_gcn/data/skeletons/openpose.json",
+        "in_feat": 3,
+        "buffer": 1,
+        "stages": 1,
+        "layers": [9],
+        "kernel": [9],
+        "latency": false,
+        "importance": true,
+        "in_ch": [
+            [64,64,64,64,128,128,128,256,256]
+        ],
+        "out_ch": [
+            [64,64,64,128,128,128,256,256,256]
+        ],
+        "stride": [
+            [1,1,1,2,1,1,2,1,1]
+        ],
+        "residual": [
+            [0,1,1,1,1,1,1,1,1]
+        ],
+        "dropout": [
+            [0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]
+        ]
+    },
+    "optimizer": {
+        "seed": 1538574472,
+        "epochs": 100,
+        "learning_rate": 0.0005,
+        "batch_size": 16
+    }
+}
