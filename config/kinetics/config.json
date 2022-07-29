@@ -32,7 +32,8 @@
     "optimizer": {
         "seed": 1538574472,
         "epochs": 100,
+        "checkpoints": [9,19,29,39,49,59,69,79,89],
         "learning_rate": 0.0005,
-        "batch_size": 16
+        "batch_size": 8
     }
 }

@@ -1,5 +1,5 @@
-#!/bin/bash -l
-#PBS -A hpcinfo_training
+#!/bin/bash
+#PBS -A lp_stadius_fpga_ai
 #PBS -l nodes=1:ppn=36:gpus=4:skylake           ## (1/1) Debug Skylake 4x P100 GPU node (requires 9 cores per gpu)
 #PBS -l partition=gpu                           ## GPU partition
 #PBS -l pmem=5gb                                ## Debug Skylake GPU node has thin node's memory (192GB)
