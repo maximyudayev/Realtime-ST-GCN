@@ -41,7 +41,7 @@ def common(args: dict) -> Tuple[dict, dict, torch.device, DataLoader, DataLoader
     """
     
     # setting up random number generator for deterministic and meaningful benchmarking
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
