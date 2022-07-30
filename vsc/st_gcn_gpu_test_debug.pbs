@@ -1,10 +1,10 @@
 #!/bin/bash
-#PBS -A lp_stadius_fpga_ai
-#PBS -l nodes=1:ppn=36:gpus=4:skylake           ## (1/1) Debug Skylake 4x P100 GPU node (requires 9 cores per gpu)
+#PBS -A hpcinfo_training
+#PBS -l nodes=1:ppn=9:gpus=1:skylake            ## (1/1) Debug Skylake 1x P100 GPU node (requires 9 cores per gpu)
 #PBS -l partition=gpu                           ## GPU partition
 #PBS -l pmem=5gb                                ## Debug Skylake GPU node has thin node's memory (192GB)
 #PBS -l qos=debugging                           ## Debug specifier
-#PBS -l walltime=00:30:00                       ## Debug jobs limited to 30 min
+#PBS -l walltime=00:10:00                       ## Debug jobs limited to 30 min
 #PBS -N st_gcn_debug
 #PBS -o debug/stdout.$PBS_JOBNAME.$PBS_JOBID
 #PBS -e debug/stderr.$PBS_JOBNAME.$PBS_JOBID
