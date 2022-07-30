@@ -1,6 +1,7 @@
 # directories in any part of the tree
 .vscode
 __pycache__
+debug
 
 # exact directories
 data/*

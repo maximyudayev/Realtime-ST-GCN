@@ -1,8 +1,8 @@
 #!/bin/bash
 #PBS -A lp_stadius_fpga_ai
-#PBS -l nodes=1:ppn=36:gpus=8:cascadelake       ## (1/2) Full Cascadelake x8 V100 GPU node (requires 4 cores per gpu)
-#PBS -l partition=gpu                           ## GPU partition
-#PBS -l pmem=20gb                               ## Cascadelake GPU nodes have larger memory (768GB)
+#PBS -l nodes=1:ppn=36:gpus=8:cascadelake       # (1/2) Full Cascadelake x8 V100 GPU node (requires 4 cores per gpu)
+#PBS -l partition=gpu                           # GPU partition
+#PBS -l pmem=20gb                               # Cascadelake GPU nodes have larger memory (768GB)
 #PBS -l walltime=03:00:00
 #PBS -N st_gcn_training
 #PBS -o debug/stdout.$PBS_JOBNAME.$PBS_JOBID

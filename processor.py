@@ -51,8 +51,12 @@ class Processor:
         # (prepares Dropout and BatchNormalization layers to disable and to learn parameters, respectively)
         self.model.train()
 
-        # move the model to the compute device if available (CPU, GPU, TPU, etc.)
+        # move the model to the compute device(s) if available (CPU, GPU, TPU, etc.)
+        if torch.cuda.device_count() > 1:
+            print("Using", torch.cuda.device_count(), "allocated GPUs")
+            self.model = nn.DataParallel(self.model)
         self.model.to(device)
+
         self.base_lr = learning_rate
 
         # setup the optimizer
@@ -67,7 +71,7 @@ class Processor:
                 total = 0
 
                 # sweep through the training dataset in minibatches
-                for captures, labels in dataloader:
+                for i, (captures, labels) in enumerate(dataloader):
                     # move both data to the compute device
                     # (captures is a batch of full-length captures, label is a batch of ground truths)
                     captures = captures[:,:,:,:,kwargs['subject']].to(device)
@@ -99,8 +103,12 @@ class Processor:
                     # calculate the predictions statistics
                     # this only sums the number of correctly predicted frames, but doesn't look at prediction jitter
                     _, predicted = torch.max(predictions, 1)
-                    correct += torch.sum(predicted == labels).data.item()
-                    total += labels.numel()
+                    
+                    cor = torch.sum(predicted == labels).data.item()
+                    tot = labels.numel()
+                    correct += cor
+                    total += tot
+                    print("[epoch {0}]: batch = {1}, acc = {2}".format(epoch + 1, i, cor/tot), flush=True, file=kwargs['log'][1])
 
                 # checkpoint the model during training at specified epochs
                 if epoch in checkpoints:

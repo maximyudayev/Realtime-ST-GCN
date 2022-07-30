@@ -1,9 +1,9 @@
 #!/bin/bash
 #PBS -A lp_stadius_fpga_ai
-#PBS -l nodes=1:ppn=36:gpus=4:skylake           ## (1/20) Full Skylake x4 P100 GPU node (requires 9 cores per gpu)
-#PBS -l partition=gpu                           ## GPU partition
-#PBS -l pmem=5gb                                ## Skylake GPU nodes have thin node's memory (192GB)
-#PBS -l walltime=03:00:00
+#PBS -l nodes=1:ppn=36:gpus=4:skylake           # (1/20) Full Skylake x4 P100 GPU node (requires 9 cores per gpu)
+#PBS -l partition=gpu                           # GPU partition
+#PBS -l pmem=5gb                                # Skylake GPU nodes have thin node's memory (192GB)
+#PBS -l walltime=70:00:00
 #PBS -N st_gcn_training
 #PBS -o debug/stdout.$PBS_JOBNAME.$PBS_JOBID
 #PBS -e debug/stderr.$PBS_JOBNAME.$PBS_JOBID

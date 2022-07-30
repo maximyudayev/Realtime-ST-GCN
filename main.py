@@ -16,7 +16,7 @@ import time
 import json
 
 # TODO:
-# 1. Implement train/test/benchmark functions for multi-GPU functions
+# 1. Implement test/benchmark functions for multi-GPU functions
 # 2. Setup all CLI arguments for the 3 commands
 # 3. Provide a way to monitor progress in realtime (e.g. TensorBoard)
 
@@ -41,7 +41,7 @@ def common(args: dict) -> Tuple[dict, dict, torch.device, DataLoader, DataLoader
     """
     
     # setting up random number generator for deterministic and meaningful benchmarking
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
@@ -428,8 +428,8 @@ if __name__ == '__main__':
     parser_benchmark.set_defaults(func=benchmark)
 
     # parse the arguments
-    args = parser.parse_args(['train']) # uncomment the line during debug
-    # args = parser.parse_args()        # uncomment the line during deployment
+    # args = parser.parse_args(['train']) # uncomment the line during debug
+    args = parser.parse_args()        # uncomment the line during deployment
 
     # enter the appropriate command
     args.func(args)
