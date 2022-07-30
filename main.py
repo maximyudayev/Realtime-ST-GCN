@@ -3,9 +3,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from data_prep.dataset import SkeletonDataset
-from models.proposed.st_gcn import RTSTGCN
-# from models.proposed.st_gcn import BatchSTGCN
-# from models.original.st_gcn import Model as OriginalSTGCN
+from models.proposed.st_gcn import Stgcn
+# from models.original.st_gcn import Model as OriginalStgcn
 from processor import Processor
 import st_gcn_parser
 import argparse
@@ -70,15 +69,12 @@ def common(args: dict) -> Tuple[dict, dict, torch.device, DataLoader, DataLoader
     return graph, actions_dict, device, train_dataloader, val_dataloader
 
 
-def build_model(args: dict, num_classes: int) -> nn.Module:
+def build_model(args: dict) -> nn.Module:
     """Builds the selected ST-GCN model variant.
     
     Args:
         args : ``dict``
             Parsed CLI arguments.
-        
-        num_classes : ``int``
-            Number of action classification classes.
 
     Returns:
         PyTorch Model corresponding to the user-defined CLI parameters.
@@ -88,7 +84,6 @@ def build_model(args: dict, num_classes: int) -> nn.Module:
             If GCN parameter list sizes do not match the number of stages.
     """
 
-    # TODO: add argument checks as needed
     if (len(args.in_ch) != args.stages or
         len(args.out_ch) != args.stages or
         len(args.stride) != args.stages or
@@ -96,24 +91,19 @@ def build_model(args: dict, num_classes: int) -> nn.Module:
         raise ValueError(
             'GCN parameter list sizes do not match the number of stages. '
             'Check your config file.')
+    elif (args.model == 'realtime' and args.buffer != 1):
+        raise ValueError(
+            'Selected the realtime model, but set buffer size to 1. '
+            'Check your config file.')
     
-    ##################################################################
-
-    args.num_classes = num_classes
-
-    # TODO: fill constructors with necessary parameters
-    if args.model == 'realtime':
-        args.buffer = 1
-        model = RTSTGCN(**vars(args))
-    elif args.model == 'buffer_realtime':
-        model = RTSTGCN(**vars(args))
-    elif args.model == 'batch':
-        # model = BatchSTGCN()
+    if args.model == 'original':
+        # model = OriginalStgcn()
         pass
-    elif args.model == 'original':
-        # model = OriginalSTGCN()
-        pass
-    # else is not needed because model choice is limited to the argparse options
+    else:
+        # all 3 adapted versions are encapsulated in the same class, training is identical (batch mode),
+        # usecase changes applied during inference
+        model = Stgcn(**vars(args))
+    
     return model
 
 
@@ -124,23 +114,20 @@ def train(args):
         args : ``dict``
             Parsed CLI arguments.
     """
-    
-    # TODO: add argument checks as needed
-    
-    ##################################################################
 
     # perform common setup around the model's black box
     args.graph, actions, device, train_dataloader, _ = common(args)
-    num_classes = len(actions)
+    args.num_classes = len(actions)
     
-    # construct the target model using the CLI arguments
-    model = build_model(args, num_classes)
-
-    # construct a processing wrapper
-    trainer = Processor(model, num_classes)
-
     # split between the subjects in the captures
     data, _ = next(iter(train_dataloader))
+    args.capture_length = data.shape[2]
+
+    # construct the target model using the CLI arguments
+    model = build_model(args)
+
+    # construct a processing wrapper
+    trainer = Processor(model, args.num_classes)
 
     start_time = time.time()
 
@@ -441,7 +428,8 @@ if __name__ == '__main__':
     parser_benchmark.set_defaults(func=benchmark)
 
     # parse the arguments
-    args = parser.parse_args(['train'])
+    args = parser.parse_args(['train']) # uncomment the line during debug
+    # args = parser.parse_args()        # uncomment the line during deployment
 
     # enter the appropriate command
     args.func(args)

@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch import optim
-import math
 
 class Processor:
     """ST-GCN processing wrapper for training and testing the model.
@@ -58,71 +57,64 @@ class Processor:
 
         # setup the optimizer
         optimizer = optim.Adam(self.model.parameters(), lr=self.base_lr)
+        
+        with torch.autograd.set_detect_anomaly(True):
+            # train the model for num_epochs
+            # (dataloader is automatically shuffled after each epoch)
+            for epoch in range(epochs):            
+                epoch_loss = 0
+                correct = 0
+                total = 0
 
-        # train the model for num_epochs
-        # (dataloader is automatically shuffled after each epoch)
-        for epoch in range(epochs):            
-            epoch_loss = 0
-            correct = 0
-            total = 0
-
-            # sweep through the training dataset in minibatches
-            for captures, labels in dataloader:
-                # move both data to the compute device
-                # (captures is a batch of full-length captures, label is a batch of ground truths)
-                captures = captures[:,:,:,:,kwargs['subject']].to(device)
-                # broadcast the labels across the capture length dimension for framewise comparison to predictions
-                # expanding labels tensor does not allocate new memory, only creates a new view on existing tensor
-                labels = labels[:,None].expand(-1,captures.shape[2]).to(device)
-                
-                # print('moved data to the device')
-                # zero the gradient buffers
-                optimizer.zero_grad()
-                
-                # make predictions and compute the loss
-                # supply the captures in user-defined length (realtime, buffered, batch)
-                # (tensor will have identical number of dimensions, but only 2nd dimension will change 1 -> L)
-                predictions = []
-
-                for minibatch in range(math.ceil(captures.shape[2]/kwargs['buffer'])):
+                # sweep through the training dataset in minibatches
+                for captures, labels in dataloader:
+                    # move both data to the compute device
+                    # (captures is a batch of full-length captures, label is a batch of ground truths)
+                    captures = captures[:,:,:,:,kwargs['subject']].to(device)
+                    # broadcast the labels across the capture length dimension for framewise comparison to predictions
+                    # expanding labels tensor does not allocate new memory, only creates a new view on existing tensor
+                    labels = labels[:,None].expand(-1,captures.shape[2]).to(device)
+                    
+                    # print('moved data to the device')
+                    # zero the gradient buffers
+                    optimizer.zero_grad()
+                    
+                    # make predictions and compute the loss
                     # forward pass the minibatch through the model for the corresponding subject
                     # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
-                    predictions.append(self.model(captures[:,:,minibatch*kwargs['buffer']:(minibatch+1)*kwargs['buffer']]))
+                    # the output tensor has shape (N, C, L)
+                    predictions = self.model(captures)
+
+                    # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
+                    # N-batch, C-class, K-extra dimension (capture length)
+                    loss = self.ce(predictions, labels)
+                    epoch_loss += loss.data.item()
+
+                    # backward pass to compute the gradients
+                    loss.backward()
+
+                    # update parameters based on the computed gradients
+                    optimizer.step()
+
+                    # calculate the predictions statistics
+                    # this only sums the number of correctly predicted frames, but doesn't look at prediction jitter
+                    _, predicted = torch.max(predictions, 1)
+                    correct += torch.sum(predicted == labels).data.item()
+                    total += labels.numel()
+
+                # checkpoint the model during training at specified epochs
+                if epoch in checkpoints:
+                    torch.save(self.model.state_dict(), "{0}/epoch-{1}.model".format(save_dir, epoch + 1))
+                    torch.save(optimizer.state_dict(), "{0}/epoch-{1}.opt".format(save_dir, epoch + 1))
                 
-                # stack the predictions back into the dimension of the input capture
-                # (N, C, L'): N-batch, C-classes, L'-full length
-                output = torch.cat(predictions, dim=2)
+                print("[epoch {0}]: epoch loss = {1}, acc = {2}".format(
+                    epoch + 1, 
+                    epoch_loss / len(dataloader),
+                    float(correct) / total), flush=True, file=kwargs['log'][1])
 
-                # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
-                # N-batch, C-class, K-extra dimension (capture length)
-                loss = self.ce(output, labels)
-                epoch_loss += loss.data.item()
-
-                # backward pass to compute the gradients
-                loss.backward()
-
-                # update parameters based on the computed gradients
-                optimizer.step()
-
-                # calculate the predictions statistics
-                # this only sums the number of correctly predicted frames, but doesn't look at prediction jitter
-                _, predicted = torch.max(output, 1)
-                correct += torch.sum(predicted == labels).data.item()
-                total += labels.numel()
-
-            # checkpoint the model during training at specified epochs
-            if epoch in checkpoints:
-                torch.save(self.model.state_dict(), "{0}/epoch-{1}.model".format(save_dir, epoch + 1))
-                torch.save(optimizer.state_dict(), "{0}/epoch-{1}.opt".format(save_dir, epoch + 1))
-            
-            print("[epoch {0}]: epoch loss = {1}, acc = {2}".format(
-                epoch + 1, 
-                epoch_loss / len(dataloader),
-                float(correct) / total), flush=True, file=kwargs['log'][1])
-
-        # save the final model
-        torch.save(self.model.state_dict(), "{0}/final.model".format(save_dir))
-        torch.save(optimizer.state_dict(), "{0}/final.opt".format(save_dir))
+            # save the final model
+            torch.save(self.model.state_dict(), "{0}/final.model".format(save_dir))
+            torch.save(optimizer.state_dict(), "{0}/final.opt".format(save_dir))
         return
 
 

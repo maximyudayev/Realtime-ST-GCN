@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 
 # Test dimensions
 N = 2
@@ -7,12 +8,12 @@ V = 5
 C = 6
 S = 2
 K = 9
-L = 1
+L = 300
 G = S*(K-1)+1
 D = int(V*(1+V)/2)
 
 # FIFO for internal logic
-fifo = torch.zeros(N,G,P,C,V)
+fifo = torch.zeros(N,G,P,C,V,dtype=torch.int64)
 
 # Makes P V-by-V symmetric adjacency matrices
 A = torch.zeros(P,V,V,dtype=torch.int64)
@@ -23,19 +24,19 @@ for k in range(P):
     A[k].T[i,j]=vals[k*D:(k+1)*D]
 
 # Verify adjacency matrix normalization logic
-t1 = torch.sum(A[0],0,dtype=torch.float64)
-t2 = torch.zeros(V,V,dtype=torch.float64)
-for k in range(V):
-    if t1[k]>0:
-        t2[k,k] = t1[k]**(-0.5)
+# t1 = torch.sum(A[0],0,dtype=torch.float64)
+# t2 = torch.zeros(V,V,dtype=torch.float64)
+# for k in range(V):
+#     if t1[k]>0:
+#         t2[k,k] = t1[k]**(-0.5)
 
-t3 = torch.tensor(A[0],dtype=torch.float64)
-t4 = torch.matmul(torch.matmul(t2, t3),t2)
+# t3 = torch.tensor(A[0],dtype=torch.float64)
+# t4 = torch.matmul(torch.matmul(t2, t3),t2)
 
 # Mimic 1x1 convolution of the input
 
 # Mimic output of spatial FC (Conv2D)
-a = torch.tensor(range(N*C*P*V), dtype=torch.int64)
+a = torch.tensor(range(N*C*P*L*V), dtype=torch.int64)
 a = torch.reshape(a,(N,C*P,L,V))
 
 # Prepare tensor for multiplication with adjacency matrices
@@ -63,3 +64,19 @@ for i in range(e.shape[1]):
 # stack frame-wise tensors into the original length L
 # [(N,C,V)] -> (N,C,L,V)
 h = torch.stack(outputs, 2)
+
+# lower triangle matrix for temporal accumulation that mimics FIFO behavior
+lt_matrix = torch.zeros(L,L,dtype=torch.int64)
+for i in range(K):
+    lt_matrix += F.pad(torch.eye(L-S*i,dtype=torch.int64), (0,i*S,i*S,0))
+lt_matrix = torch.transpose(lt_matrix,0,1)
+
+f_new = torch.permute(e, (0,2,3,4,1))
+g_new = torch.matmul(f_new, lt_matrix)
+# sum across partitions (N,C,V,L)
+h_new = torch.sum(g_new, dim=(1))
+# match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V)
+i_new = torch.permute(h_new, (0,1,3,2))
+
+# compare the results of the 2 approaches (must yield identical results for integer arithmetic)
+assert(torch.equal(h, i_new))
