@@ -476,15 +476,9 @@ class StgcnLayer(nn.Module):
         self.stride = stride
 
         self.out_channels = out_channels
-        
-        # Lower triangle matrix for temporal accumulation that mimics FIFO behavior
-        lt_matrix = torch.zeros(capture_length, capture_length)
-        for i in range(kernel_size):
-            lt_matrix += F.pad(
-                torch.eye(
-                    capture_length - stride * i), 
-                (0,i*stride,i*stride,0))
-        self.lt_matrix = torch.transpose(lt_matrix,0,1)
+        # start padding across the batch dimension, accounting for strided temporal accumulation
+        self.padding_size = stride*(kernel_size-1)
+        self.window_size = stride*(kernel_size-1)+1
 
         # convolution of incoming frame 
         # (out_channels is a multiple of the partition number
@@ -530,17 +524,21 @@ class StgcnLayer(nn.Module):
         d = torch.permute(c, (0,2,4,1,3))
         # single multiplication with the adjacency matrices (spatial selective addition, across partitions)
         e = torch.matmul(d, A)
+        
+        # zero-pad the beginning of the sequence (L) for G-sized window to slide over, similar to a FIFO filling up
+        f = F.pad(e, [0]*6+[self.padding_size,0])
+        # sum temporally, don't forget to use the L-size before padding to produce an equ-length output
+        outputs = []
+        for id in range(e.size()[1]):
+            output = torch.sum(f[:,range(id, id+self.window_size, self.stride)], dim=(1))
+            outputs.append(output)
 
-        # sum temporally by multiplying features with the Toeplitz matrix
-        # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L)
-        f = torch.permute(e, (0,2,3,4,1))
-        g = torch.matmul(f, self.lt_matrix)
-        # sum across partitions (N,C,V,L)
+        # [(N,P,C,V)] -> (N,P,C,L,V)
+        g = torch.stack(outputs, dim=3)
+        # sum across partitions (N,C,L,V)
         h = torch.sum(g, dim=(1))
-        # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V)
-        i = torch.permute(h, (0,1,3,2))
 
         # add the branches (main + residual)
-        j = i + res
+        i = h + res
 
-        return self.relu(j)
+        return self.relu(i)

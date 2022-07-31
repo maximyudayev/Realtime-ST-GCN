@@ -428,8 +428,8 @@ if __name__ == '__main__':
     parser_benchmark.set_defaults(func=benchmark)
 
     # parse the arguments
-    # args = parser.parse_args(['train']) # uncomment the line during debug
-    args = parser.parse_args()        # uncomment the line during deployment
+    args = parser.parse_args(['train']) # uncomment the line during debug
+    # args = parser.parse_args()        # uncomment the line during deployment
 
     # enter the appropriate command
     args.func(args)
