@@ -198,30 +198,31 @@ class Stgcn(nn.Module):
     #     return super().train(mode)
 
     
-    def eval(self: nn.Module) -> nn.Module:
-        super().eval()
+    # def eval(self: nn.Module) -> nn.Module:
+    #     super().eval()
 
-        # stack of ST-GCN layers
-        stack = [[RtStgcnLayer(
-                    num_joints=self.conf['graph']['num_node'],
-                    fifo_latency=self.conf['latency'],
-                    in_channels=self.conf['in_ch'][i][j],
-                    out_channels=self.conf['out_ch'][i][j],
-                    kernel_size=self.conf['kernel'][i],
-                    stride=self.conf['stride'][i][j],
-                    num_partitions=self.A.shape[0],
-                    residual=not not self.conf['residual'][i][j],
-                    dropout=self.conf['dropout'][i][j],
-                    **self.conf)
-                for j in range(layers_in_stage)] 
-                for i, layers_in_stage in enumerate(self.conf['layers'])]
-        # flatten into a single sequence of layers after parameters were used to construct
-        # (done like that to make config files more readable)
-        self.st_gcn = nn.ModuleList([module for sublist in stack for module in sublist])
+    #     # stack of ST-GCN layers
+    #     stack = [[RtStgcnLayer(
+    #                 num_joints=self.conf['graph']['num_node'],
+    #                 fifo_latency=self.conf['latency'],
+    #                 in_channels=self.conf['in_ch'][i][j],
+    #                 out_channels=self.conf['out_ch'][i][j],
+    #                 kernel_size=self.conf['kernel'][i],
+    #                 stride=self.conf['stride'][i][j],
+    #                 num_partitions=self.A.shape[0],
+    #                 residual=not not self.conf['residual'][i][j],
+    #                 dropout=self.conf['dropout'][i][j],
+    #                 **self.conf)
+    #             for j in range(layers_in_stage)] 
+    #             for i, layers_in_stage in enumerate(self.conf['layers'])]
+    #     # flatten into a single sequence of layers after parameters were used to construct
+    #     # (done like that to make config files more readable)
+    #     new_st_gcn = nn.ModuleList([module for sublist in stack for module in sublist])
 
-        # TODO: copy trained weights over from batch training to the inference layers
+    #     # TODO: copy trained weights over from batch training to the inference layers
+    #     # for self.parameters()
 
-        return self
+    #     return self
 
     
 class RtStgcnLayer(nn.Module):

@@ -15,7 +15,7 @@ Classes are decoupled for modularity and readability, with separation of concern
 - [ ] Quantize the model with the 8-bit dynamic fixed-point technique.
 - [ ] Compare correct adapted quantized and floating-point models against the original floating-point baseline.
 - [ ] Write a corrective review article on [Yan et al. (2018)](https://arxiv.org/abs/1801.07455) in NeurIPS, CVPR (origin of ST-GCN), or ICCV.
-- [ ] Add ST-GCN eloborate explanatory document to the repository (or link to the preprint article).
+- [ ] Add ST-GCN eloborate explanatory document to the repository (or link to the preprint article). Also clarify why RT ST-GCN can be trained as a Batch model and later just copy the learned parameters over.
 - [ ] Do design space exploration of the network parameters on the adapted network for software-hardware co-design of an action segmentation hardware accelerator.
 - [ ] Do transfer learning for freezing-of-gait (FOG) prediction.
 
@@ -184,6 +184,18 @@ Finally, custom model evaluation can be achieved by this command as we mentioned
 ```
 python main.py recognition -c config/st_gcn/<dataset>/test.yaml --weights <path to model weights>
 ```--> 
+## Model
+[torchinfo](https://github.com/TylerYep/torchinfo) spits out the following model summary:
+
+1. **Proposed Batch ST-GCN**
+   1. \#parameters: 806'074
+   2. \#MACs: 4.46 G
+
+This checks out with manual counting:
+
+1. **Proposed Batch ST-GCN**
+   1. \#parameters: 806'074
+   2. \#MACs: 14.65 M/sample -> 4.4 G (does not account for some extra multiplications with edge importance matrices and BN on residual branches of dimension-matching resnet blocks)
 
 ## Citation
 Please cite the following paper if you use this repository in your reseach.

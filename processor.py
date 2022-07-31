@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch import optim
+import time
 
 class Processor:
     """ST-GCN processing wrapper for training and testing the model.
@@ -53,7 +54,7 @@ class Processor:
 
         # move the model to the compute device(s) if available (CPU, GPU, TPU, etc.)
         if torch.cuda.device_count() > 1:
-            print("Using", torch.cuda.device_count(), "allocated GPUs")
+            print("Using", torch.cuda.device_count(), "allocated GPUs", flush=True, file=kwargs['log'][0])
             self.model = nn.DataParallel(self.model)
         self.model.to(device)
 
@@ -87,18 +88,24 @@ class Processor:
                     # forward pass the minibatch through the model for the corresponding subject
                     # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
                     # the output tensor has shape (N, C, L)
+                    pred_start = time.time()
                     predictions = self.model(captures)
+                    pred_end = time.time()
+                    print("[epoch {0}]: batch = {1}, pred_time = {2}".format(epoch + 1, i, pred_end-pred_start), flush=True, file=kwargs['log'][0])
 
                     # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
                     # N-batch, C-class, K-extra dimension (capture length)
                     loss = self.ce(predictions, labels)
                     epoch_loss += loss.data.item()
-
+                    
+                    optim_start = time.time()
                     # backward pass to compute the gradients
                     loss.backward()
 
                     # update parameters based on the computed gradients
                     optimizer.step()
+                    optim_end = time.time()
+                    print("[epoch {0}]: batch = {1}, optim_time = {2}".format(epoch + 1, i, optim_end-optim_start), flush=True, file=kwargs['log'][0])
 
                     # calculate the predictions statistics
                     # this only sums the number of correctly predicted frames, but doesn't look at prediction jitter
@@ -108,7 +115,7 @@ class Processor:
                     tot = labels.numel()
                     correct += cor
                     total += tot
-                    print("[epoch {0}]: batch = {1}, acc = {2}".format(epoch + 1, i, cor/tot), flush=True, file=kwargs['log'][1])
+                    print("[epoch {0}]: batch = {1}, acc = {2}".format(epoch + 1, i, cor/tot), flush=True, file=kwargs['log'][0])
 
                 # checkpoint the model during training at specified epochs
                 if epoch in checkpoints:
@@ -118,7 +125,7 @@ class Processor:
                 print("[epoch {0}]: epoch loss = {1}, acc = {2}".format(
                     epoch + 1, 
                     epoch_loss / len(dataloader),
-                    float(correct) / total), flush=True, file=kwargs['log'][1])
+                    float(correct) / total), flush=True, file=kwargs['log'][0])
 
             # save the final model
             torch.save(self.model.state_dict(), "{0}/final.model".format(save_dir))

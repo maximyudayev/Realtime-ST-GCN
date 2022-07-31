@@ -133,7 +133,7 @@ def train(args):
 
     # last dimension is the number of subjects in the scene (2 for datasets used)
     for i in range(data.shape[-1]):
-        print("Training subject: {0}".format(i), flush=True, file=args.log[1])
+        print("Training subject: {0}".format(i), flush=True, file=args.log[0])
         args.subject = i
 
         # prepare a directory to store results
@@ -149,7 +149,7 @@ def train(args):
             device=device,    
             **vars(args))
     
-    print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[1])
+    print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
     return
 
 
@@ -428,8 +428,8 @@ if __name__ == '__main__':
     parser_benchmark.set_defaults(func=benchmark)
 
     # parse the arguments
-    # args = parser.parse_args(['train']) # uncomment the line during debug
-    args = parser.parse_args()        # uncomment the line during deployment
+    args = parser.parse_args(['train']) # uncomment the line during debug
+    # args = parser.parse_args()        # uncomment the line during deployment
 
     # enter the appropriate command
     args.func(args)
