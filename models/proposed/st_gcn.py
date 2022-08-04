@@ -258,15 +258,15 @@ class RtStgcnLayer(nn.Module):
 
     def __init__(
         self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int,
-        num_joints: int,
-        stride: int,
-        num_partitions: int,
-        dropout: float,
-        residual: bool,
-        fifo_latency: bool,
+        in_channels,
+        out_channels,
+        kernel_size,
+        num_joints,
+        stride,
+        num_partitions,
+        dropout,
+        residual,
+        fifo_latency,
         **kwargs):
         """
         Args:
@@ -366,7 +366,7 @@ class RtStgcnLayer(nn.Module):
         c = torch.stack(b, -1)
         # change the dimension order for the correct broadcating of the adjacency matrix
         # (N,C,L,V,P) -> (N,L,P,C,V)
-        d = torch.permute(c, (0,2,4,1,3))
+        d = c.permute(0,2,4,1,3)
         # single multiplication with the adjacency matrices (spatial selective addition, across partitions)
         e = torch.matmul(d, A)
 
@@ -429,15 +429,15 @@ class StgcnLayer(nn.Module):
 
     def __init__(
         self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int,
-        num_joints: int,
-        stride: int,
-        num_partitions: int,
-        dropout: float,
-        residual: bool,
-        capture_length: int):
+        in_channels,
+        out_channels,
+        kernel_size,
+        num_joints,
+        stride,
+        num_partitions,
+        dropout,
+        residual,
+        capture_length):
         """
         Args:
             in_channels : ``int``
@@ -478,14 +478,17 @@ class StgcnLayer(nn.Module):
 
         self.out_channels = out_channels
         
-        # Lower triangle matrix for temporal accumulation that mimics FIFO behavior
+        # lower triangle matrix for temporal accumulation that mimics FIFO behavior
         lt_matrix = torch.zeros(capture_length, capture_length)
         for i in range(kernel_size):
             lt_matrix += F.pad(
                 torch.eye(
                     capture_length - stride * i), 
                 (0,i*stride,i*stride,0))
-        self.lt_matrix = torch.transpose(lt_matrix,0,1)
+        lt_matrix = torch.transpose(lt_matrix,0,1)
+        # must register matrix as a buffer to automatically move to GPU with model.to_device()
+        # for PyTorch v1.0.1
+        self.register_buffer('lt_matrix', lt_matrix)
 
         # convolution of incoming frame 
         # (out_channels is a multiple of the partition number
@@ -528,18 +531,18 @@ class StgcnLayer(nn.Module):
         c = torch.stack(b, -1)
         # change the dimension order for the correct broadcating of the adjacency matrix
         # (N,C,L,V,P) -> (N,L,P,C,V)
-        d = torch.permute(c, (0,2,4,1,3))
+        d = c.permute(0,2,4,1,3)
         # single multiplication with the adjacency matrices (spatial selective addition, across partitions)
         e = torch.matmul(d, A)
 
         # sum temporally by multiplying features with the Toeplitz matrix
         # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L)
-        f = torch.permute(e, (0,2,3,4,1))
+        f = e.permute(0,2,3,4,1)
         g = torch.matmul(f, self.lt_matrix)
         # sum across partitions (N,C,V,L)
         h = torch.sum(g, dim=(1))
         # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V)
-        i = torch.permute(h, (0,1,3,2))
+        i = h.permute(0,1,3,2)
 
         # add the branches (main + residual)
         j = i + res

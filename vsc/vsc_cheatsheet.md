@@ -61,3 +61,4 @@ gquote example.pbs
 
 `mam-list-transactions J 12345` -> summarize consumed resources of a completed job
 
+`watch "nvidia-smi` -> monitor GPUs

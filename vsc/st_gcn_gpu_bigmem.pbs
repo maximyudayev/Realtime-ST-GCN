@@ -1,8 +1,8 @@
 #!/bin/bash
 #PBS -A lp_stadius_fpga_ai
-#PBS -l nodes=1:ppn=36:gpus=8:cascadelake       # (1/2) Full Cascadelake x8 V100 GPU node (requires 4 cores per gpu)
-#PBS -l partition=gpu                           # GPU partition
-#PBS -l pmem=20gb                               # Cascadelake GPU nodes have larger memory (768GB)
+#PBS -l nodes=1:ppn=36:gpus=8:cascadelake
+#PBS -l partition=gpu
+#PBS -l pmem=20gb
 #PBS -l walltime=03:00:00
 #PBS -N st_gcn_training
 #PBS -o debug/stdout.$PBS_JOBNAME.$PBS_JOBID
@@ -10,17 +10,18 @@
 #PBS -m bae
 #PBS -M maxim.yudayev@kuleuven.be
 
+# (1/2) Full Cascadelake x8 V100 GPU node (requires 4 cores per gpu)
+# GPU partition
+# Cascadelake GPU nodes have larger memory (768GB)
+
 # Change directory to location from which task was submitted to queue: $VSC_DATA/...
 cd $PBS_O_WORKDIR
 # Purge all existing software packages
 module purge
 
-source activate rt-st-gcn 2> /dev/null
-if [ $? -ne 0 ]
-then
-    (>&2 echo '### [ERR]: conda environment not sourced successfully (.pbs)')
-fi
+# Load VSC optimized PyTorch with CUDA
+module load PyTorch/1.0.1-intel-2018a
 
 (>&2 echo 'starting computation')
 # Execute and time the script
-time python3 ../main.py train --config '/data/leuven/341/vsc34153/Realtime-ST-GCN/config/default_vsc.json'
+time python ../main.py train --config '/data/leuven/341/vsc34153/Realtime-ST-GCN/config/default_vsc.json'

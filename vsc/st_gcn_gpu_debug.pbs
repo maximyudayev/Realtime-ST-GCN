@@ -1,27 +1,30 @@
 #!/bin/bash
 #PBS -A lp_stadius_fpga_ai
-#PBS -l nodes=1:ppn=36:gpus=4:skylake           # (1/1) Debug Skylake 4x P100 GPU node (requires 9 cores per gpu)
-#PBS -l partition=gpu                           # GPU partition
-#PBS -l pmem=5gb                                # Debug Skylake GPU node has thin node's memory (192GB)
-#PBS -l qos=debugging                           # Debug specifier
-#PBS -l walltime=00:30:00                       # Debug jobs limited to 30 min
+#PBS -l nodes=1:ppn=36:gpus=4:skylake
+#PBS -l partition=gpu
+#PBS -l pmem=5gb
+#PBS -l qos=debugging
+#PBS -l walltime=30:00
 #PBS -N st_gcn_debug
 #PBS -o debug/stdout.$PBS_JOBNAME.$PBS_JOBID
 #PBS -e debug/stderr.$PBS_JOBNAME.$PBS_JOBID
 #PBS -m bae
 #PBS -M maxim.yudayev@kuleuven.be
 
+# (1/1) Debug Skylake 4x P100 GPU node (requires 9 cores per gpu)
+# GPU partition
+# Debug Skylake GPU node has thin node's memory (192GB)
+# Debug specifier
+# Debug jobs limited to 30 min
+
 # Change directory to location from which task was submitted to queue: $VSC_DATA/...
 cd $PBS_O_WORKDIR
 # Purge all existing software packages
 module purge
 
-source activate rt-st-gcn 2> /dev/null
-if [ $? -ne 0 ]
-then
-    (>&2 echo '### [ERR]: conda environment not sourced successfully (.pbs)')
-fi
+# Load VSC optimized PyTorch with CUDA
+module load PyTorch/1.0.1-intel-2018a
 
 (>&2 echo 'starting computation')
 # Execute and time the script
-time python3 ../main.py train --config '/data/leuven/341/vsc34153/Realtime-ST-GCN/config/default_vsc.json'
+time python ../main.py train --config '/data/leuven/341/vsc34153/Realtime-ST-GCN/config/default_vsc.json'

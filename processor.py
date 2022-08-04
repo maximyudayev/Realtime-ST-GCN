@@ -17,8 +17,8 @@ class Processor:
 
     def __init__(
         self,
-        model: nn.Module,
-        num_classes: int):
+        model,
+        num_classes):
         """
         Args:
             model : ``torch.nn.Module``
@@ -35,12 +35,12 @@ class Processor:
 
     def train(
         self, 
-        save_dir: str, 
-        dataloader: DataLoader,
-        device: torch.device,
-        epochs: int,
-        checkpoints: list[int],
-        learning_rate: float,
+        save_dir, 
+        dataloader,
+        device,
+        epochs,
+        checkpoints,
+        learning_rate,
         **kwargs):
         """Trains the model, given user-defined training parameters.
 

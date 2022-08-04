@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -11,7 +10,6 @@ import argparse
 import os
 import sys
 import random
-from typing import Tuple
 import time
 import json
 
@@ -20,7 +18,7 @@ import json
 # 2. Setup all CLI arguments for the 3 commands
 # 3. Provide a way to monitor progress in realtime (e.g. TensorBoard)
 
-def common(args: dict) -> Tuple[dict, dict, torch.device, DataLoader, DataLoader]:
+def common(args):
     """Performs setup common to any ST-GCN model variant.
     
     Only needs to be invoked once for a given problem (train-test, benchmark, etc.). 
@@ -69,7 +67,7 @@ def common(args: dict) -> Tuple[dict, dict, torch.device, DataLoader, DataLoader
     return graph, actions_dict, device, train_dataloader, val_dataloader
 
 
-def build_model(args: dict) -> nn.Module:
+def build_model(args):
     """Builds the selected ST-GCN model variant.
     
     Args:
@@ -150,6 +148,8 @@ def train(args):
             **vars(args))
     
     print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
+    # TODO: complete the email notification command
+    # os.system('mail -s "status update" maxim.yudayev@kuleuven.be <<< ""')
     return
 
 
@@ -428,8 +428,8 @@ if __name__ == '__main__':
     parser_benchmark.set_defaults(func=benchmark)
 
     # parse the arguments
-    args = parser.parse_args(['train']) # uncomment the line during debug
-    # args = parser.parse_args()        # uncomment the line during deployment
+    # args = parser.parse_args(['train']) # uncomment the line during debug
+    args = parser.parse_args()        # uncomment the line during deployment
 
     # enter the appropriate command
     args.func(args)
