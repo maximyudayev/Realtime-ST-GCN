@@ -9,3 +9,6 @@ pretrained_models/
 
 # exceptions
 !data/skeletons
+
+# file extensions
+*.prof

@@ -49,8 +49,8 @@ def common(args):
     train_data = SkeletonDataset('{0}/train_data.npy'.format(args.data), '{0}/train_label.pkl'.format(args.data))
     val_data = SkeletonDataset('{0}/val_data.npy'.format(args.data), '{0}/val_label.pkl'.format(args.data))
 
-    train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    val_dataloader = DataLoader(val_data, batch_size=args.batch_size, shuffle=True)
+    train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    val_dataloader = DataLoader(val_data, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
 
     # extract actions from the label file
     with open(args.actions, 'r') as action_names:

@@ -494,12 +494,12 @@ class StgcnLayer(nn.Module):
         # (out_channels is a multiple of the partition number
         # to avoid for-looping over several partitions)
         # partition-wise convolution results are basically stacked across channel-dimension
-        self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1)
+        self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1, bias=False)
         
         # normalization and dropout on main branch
-        self.bn_do = nn.Sequential(
+        self.bn_relu = nn.Sequential(
             nn.BatchNorm2d(out_channels),
-            nn.Dropout(dropout, inplace=True))
+            nn.ReLU())
 
         # residual branch
         if not residual:
@@ -508,11 +508,17 @@ class StgcnLayer(nn.Module):
             self.residual = lambda x: x
         else:
             self.residual = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1),
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
                 nn.BatchNorm2d(out_channels))
 
         # activation of branch sum
-        self.relu = nn.ReLU(inplace=True)
+        # if no resnet connection, prevent ReLU from being applied twice
+        if not residual:
+            self.do = nn.Dropout(dropout)
+        else:
+            self.do = nn.Sequential(
+                nn.ReLU(),
+                nn.Dropout(dropout))
 
 
     def forward(self, x, A):
@@ -544,7 +550,8 @@ class StgcnLayer(nn.Module):
         # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V)
         i = h.permute(0,1,3,2)
 
-        # add the branches (main + residual)
-        j = i + res
+        # normalize the output of the st-gcn operation and activate
+        j = self.bn_relu(i)
 
-        return self.relu(j)
+        # add the branches (main + residual), activate and dropout
+        return self.do(j + res)
