@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 from data_prep.dataset import SkeletonDataset
 from models.proposed.st_gcn import Stgcn
@@ -125,10 +124,10 @@ def train(args):
     model = build_model(args)
     # load the checkpoint if not trained from scratch
     if args.checkpoint:
-        model.load_state_dict(
-            torch.load(
-                "{0}.model"
-                .format(args.checkpoint)))
+        model.load_state_dict({
+            k.split('module.')[1]: v 
+            for k, v in
+            torch.load("{0}.model".format(args.checkpoint), map_location=device).items()})
 
     # construct a processing wrapper
     trainer = Processor(model, args.num_classes)
@@ -396,11 +395,13 @@ if __name__ == '__main__':
         help='path to the output directory (default: pretrained_models/kinetics)')
     parser_train_io.add_argument(
         '--checkpoint',
+        type=str,
         metavar='',
         default=None,
         help='path to the checkpoint (default: None)')
     parser_train_io.add_argument(
         '--checkpoint_epoch',
+        type=int,
         metavar='',
         default=None,
         help='epoch id corresponding to the checkpoint (default: None)')

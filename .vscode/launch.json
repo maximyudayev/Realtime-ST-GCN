@@ -2,7 +2,21 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: Current File",
+            "name": "Local Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+                "train",
+                "--checkpoint",
+                "pretrained_models/kinetics/realtime/split_realtime_0/epoch-8",
+                "--checkpoint_epoch",
+                "7"
+            ]
+        },
+        {
+            "name": "VSC Python: Current File",
             "type": "python",
             "request": "launch",
             "program": "${file}",
@@ -12,7 +26,7 @@
                 "--config",
                 "/data/leuven/341/vsc34153/rt-st-gcn/config/default_vsc.json",
                 "--checkpoint",
-                "/scratch/leuven/341/vsc34153/rt_st_gcn/pretrained_models/kinetics/epoch-8",
+                "/scratch/leuven/341/vsc34153/rt_st_gcn/pretrained_models/kinetics/realtime/split_realtime_0/epoch-8",
                 "--checkpoint_epoch",
                 "7"
             ]

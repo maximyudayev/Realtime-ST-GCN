@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
 from torch import optim
 import time
 
@@ -67,9 +66,7 @@ class Processor:
         # load the checkpoint if not training from scratch
         if checkpoint:
             optimizer.load_state_dict(
-                torch.load(
-                    "{0}.opt"
-                    .format(checkpoint)))
+                torch.load("{0}.opt".format(checkpoint), map_location=device))
         
         with torch.autograd.set_detect_anomaly(True):
             if checkpoint:
@@ -79,7 +76,7 @@ class Processor:
             
             # train the model for num_epochs
             # (dataloader is automatically shuffled after each epoch)
-            for epoch in range(range_epochs):            
+            for epoch in range_epochs:
                 epoch_loss = 0
                 top1_correct = 0
                 top5_correct = 0
@@ -88,7 +85,7 @@ class Processor:
                 epoch_start_time = time.time()
 
                 # sweep through the training dataset in minibatches
-                for i, (captures, labels) in enumerate(dataloader):
+                for captures, labels in dataloader:
                     # move both data to the compute device
                     # (captures is a batch of full-length captures, label is a batch of ground truths)
                     captures = captures[:,:,:,:,kwargs['subject']].to(device)
