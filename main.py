@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import DataLoader
 from data_prep.dataset import SkeletonDataset
 from models.proposed.st_gcn import Stgcn
-# from models.original.st_gcn import Model as OriginalStgcn
+from models.original.st_gcn import Model as OriginalStgcn
 from processor import Processor
 import st_gcn_parser
 import argparse
@@ -94,8 +94,7 @@ def build_model(args):
             'Check your config file.')
     
     if args.model == 'original':
-        # model = OriginalStgcn()
-        pass
+        model = OriginalStgcn(**vars(args))
     else:
         # all 3 adapted versions are encapsulated in the same class, training is identical (batch mode),
         # usecase changes applied during inference
@@ -127,7 +126,7 @@ def train(args):
         model.load_state_dict({
             k.split('module.')[1]: v 
             for k, v in
-            torch.load("{0}.model".format(args.checkpoint), map_location=device).items()})
+            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
     # construct a processing wrapper
     trainer = Processor(model, args.num_classes)
@@ -136,7 +135,7 @@ def train(args):
 
     # last dimension is the number of subjects in the scene (2 for datasets used)
     for i in range(data.shape[-1]):
-        print("Training subject: {0}".format(i), file=args.log[0])
+        print("Training subject: {0}".format(i), flush=True, file=args.log[0])
         args.subject = i
 
         # prepare a directory to store results
@@ -152,7 +151,7 @@ def train(args):
             device=device,    
             **vars(args))
     
-    print("Training completed in: {0}".format(time.time() - start_time), file=args.log[0])
+    print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
     # TODO: complete the email notification command
     # os.system('mail -s "status update" maxim.yudayev@kuleuven.be <<< ""')
     return
@@ -217,13 +216,13 @@ if __name__ == '__main__':
             \r\t[--epochs EPOCHS]
             \r\t[--checkpoints [CHECKPOINTS]]
             \r\t[--learning_rate RATE]
+            \r\t[--learning_rate_decay RATE_DECAY]
             \r\t[--batch_size BATCH]
 
             \r\t[--data DATA_DIR]
             \r\t[--actions FILE]
             \r\t[--out OUT_DIR]
             \r\t[--checkpoint CHECKPOINT]
-            \r\t[--checkpoint_epoch CHCK_PT_EPOCH]
             \r\t[--log O_FILE E_FILE]
             \r\t[-v[vv]]""",
         help='train target ST-GCN network',
@@ -374,7 +373,12 @@ if __name__ == '__main__':
         '--learning_rate',
         type=float,
         metavar='',
-        help='learning rate of the optimizer (default: 0.0005)')
+        help='learning rate of the optimizer (default: 0.01)')
+    parser_train_optim.add_argument(
+        '--learning_rate_decay',
+        type=float,
+        metavar='',
+        help='learning rate decay factor of the optimizer (default: 0.1)')
     parser_train_optim.add_argument(
         '--batch_size',
         type=int,
@@ -398,13 +402,7 @@ if __name__ == '__main__':
         type=str,
         metavar='',
         default=None,
-        help='path to the checkpoint (default: None)')
-    parser_train_io.add_argument(
-        '--checkpoint_epoch',
-        type=int,
-        metavar='',
-        default=None,
-        help='epoch id corresponding to the checkpoint (default: None)')
+        help='path to the checkpoint to restore states from (default: None)')
     parser_train_io.add_argument(
         '--log',
         nargs=2,

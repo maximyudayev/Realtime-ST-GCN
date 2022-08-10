@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 from torch import optim
 import time
+import os
+    
 
 class Processor:
     """ST-GCN processing wrapper for training and testing the model.
@@ -32,6 +34,14 @@ class Processor:
         self.num_classes = num_classes
 
 
+    def update_lr(self, learning_rate, learning_rate_decay, epoch):
+        """Decays learning rate monotonically by the provided factor."""
+        
+        rate = learning_rate * pow(learning_rate_decay, epoch)
+        for g in self.optimizer.param_groups:
+            g['lr'] = rate
+
+
     def train(
         self, 
         save_dir, 
@@ -40,8 +50,8 @@ class Processor:
         epochs,
         checkpoints,
         checkpoint,
-        checkpoint_epoch,
         learning_rate,
+        learning_rate_decay,
         **kwargs):
         """Trains the model, given user-defined training parameters.
 
@@ -55,25 +65,30 @@ class Processor:
 
         # move the model to the compute device(s) if available (CPU, GPU, TPU, etc.)
         if torch.cuda.device_count() > 1:
-            print("Using", torch.cuda.device_count(), "allocated GPUs", file=kwargs['log'][0])
+            print("Using", torch.cuda.device_count(), "allocated GPUs", flush=True, file=kwargs['log'][0])
             self.model = nn.DataParallel(self.model)
         self.model.to(device)
 
-        self.base_lr = learning_rate
+        if checkpoint:
+            state = torch.load(checkpoint, map_location=device)
+            range_epochs = range(state['epoch']+1, epochs)
+        else:
+            range_epochs = range(epochs)
 
         # setup the optimizer
-        optimizer = optim.Adam(self.model.parameters(), lr=self.base_lr)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
         # load the checkpoint if not training from scratch
         if checkpoint:
-            optimizer.load_state_dict(
-                torch.load("{0}.opt".format(checkpoint), map_location=device))
-        
-        with torch.autograd.set_detect_anomaly(True):
-            if checkpoint:
-                range_epochs = range(checkpoint_epoch+1, epochs)
-            else:
-                range_epochs = range(epochs)
-            
+            self.optimizer.load_state_dict(state['optimizer_state_dict'])
+
+        with torch.autograd.set_detect_anomaly(True):            
+            # variables for email updates
+            epoch_list = []
+            epoch_loss_list = []
+            top1_acc_list = []
+            top5_acc_list = []
+            time_list = []
+
             # train the model for num_epochs
             # (dataloader is automatically shuffled after each epoch)
             for epoch in range_epochs:
@@ -81,6 +96,10 @@ class Processor:
                 top1_correct = 0
                 top5_correct = 0
                 total = 0
+
+                # decay learning rate every 10 epochs [ref: Yan 2018]
+                if (epoch % 10 == 0):
+                    self.update_lr(learning_rate, learning_rate_decay, epoch)
 
                 epoch_start_time = time.time()
 
@@ -93,9 +112,8 @@ class Processor:
                     # expanding labels tensor does not allocate new memory, only creates a new view on existing tensor
                     labels = labels[:,None].expand(-1,captures.shape[2]).to(device)
                     
-                    # print('moved data to the device')
                     # zero the gradient buffers
-                    optimizer.zero_grad()
+                    self.optimizer.zero_grad()
                     
                     # make predictions and compute the loss
                     # forward pass the minibatch through the model for the corresponding subject
@@ -112,7 +130,7 @@ class Processor:
                     loss.backward()
 
                     # update parameters based on the computed gradients
-                    optimizer.step()
+                    self.optimizer.step()
 
                     # calculate the predictions statistics
                     # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
@@ -131,13 +149,10 @@ class Processor:
                 
                 # checkpoint the model during training at specified epochs
                 if epoch in checkpoints:
-                    torch.save(self.model.state_dict(), "{0}/epoch-{1}.model".format(save_dir, epoch + 1))
-                    torch.save(optimizer.state_dict(), "{0}/epoch-{1}.opt".format(save_dir, epoch + 1))
-                    # replace the old saving approach incrementally
                     torch.save({
                         "epoch": epoch,
                         "model_state_dict": self.model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
                         "loss": epoch_loss,
                         }, "{0}/epoch-{1}.pt".format(save_dir, epoch))
                 
@@ -148,22 +163,39 @@ class Processor:
                         epoch_loss / len(dataloader),
                         top1_correct / total,
                         top5_correct / total),
+                    flush=True,
                     file=kwargs['log'][0])
                 print(
                     "[epoch {0}]: time = {1}"
                     .format(
                         epoch,
                         epoch_end_time - epoch_start_time),
+                    flush=True,
                     file=kwargs['log'][0])
 
+                # send an email update
+                epoch_list.insert(0, epoch)
+                epoch_loss_list.insert(0, epoch_loss / len(dataloader))
+                top1_acc_list.insert(0, top1_correct / total)
+                top5_acc_list.insert(0, top5_correct / total)
+                time_list.insert(0, epoch_end_time - epoch_start_time)
+                # format a stats table (in newest to oldest order) and send it by email
+                os.system(
+                    'header="\n %-6s %5s %5s %5s %5s\n";'
+                    'format=" %-03d %4.6f %1.6f %1.6f %5.6f\n";'
+                    'printf "$header" "EPOCH" "LOSS" "TOP1" "TOP5" "TIME" > $PBS_O_WORKDIR/mail_draft.txt;'
+                    'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft.txt;'
+                    'cat $PBS_O_WORKDIR/mail_draft.txt | mail -s "[$PBS_JOBID]: $PBS_JOBNAME status update" maxim.yudayev@kuleuven.be'
+                    .format(
+                        ' '.join([
+                            ' '.join([str(e) for e in t]) for t 
+                            in zip(epoch_list, epoch_loss_list, top1_acc_list, top5_acc_list, time_list)])))
+
             # save the final model
-            torch.save(self.model.state_dict(), "{0}/final.model".format(save_dir))
-            torch.save(optimizer.state_dict(), "{0}/final.opt".format(save_dir))
-            # replace the old saving approach incrementally
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
                 "loss": epoch_loss,
                 }, "{0}/final.pt".format(save_dir))
         return

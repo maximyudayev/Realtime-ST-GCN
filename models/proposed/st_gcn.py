@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.proposed.utils.graph import Graph
+from models.utils.graph import Graph
 
 class Stgcn(nn.Module):
     """Spatial temporal graph convolutional network of Yan, et al. (2018), adapted for realtime.
@@ -151,17 +151,19 @@ class Stgcn(nn.Module):
         # fcn for prediction
         # maps C to num_classes channels: (N,C,L,1) -> (N,F,L,1) 
         self.fcn_out = nn.Conv2d(
-            in_channels=kwargs['out_ch'][-1][-1], 
-            out_channels=kwargs['num_classes'], 
+            in_channels=kwargs['out_ch'][-1][-1],
+            out_channels=kwargs['num_classes'],
             kernel_size=1)
 
         # learnable edge importance weighting matrices (each layer, separate weighting)
         if kwargs['importance']:
             self.edge_importance = nn.ParameterList(
                 [nn.Parameter(
-                    torch.ones(kwargs['graph']['num_node'], 
-                    kwargs['graph']['num_node'], 
-                    requires_grad=True)) for _ in self.st_gcn])
+                    torch.ones(
+                        kwargs['graph']['num_node'], 
+                        kwargs['graph']['num_node'], 
+                        requires_grad=True)) 
+                for _ in self.st_gcn])
         else:
             self.edge_importance = [1] * len(self.st_gcn)
 
