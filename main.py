@@ -49,8 +49,8 @@ def common(args):
     train_data = SkeletonDataset('{0}/train_data.npy'.format(args.data), '{0}/train_label.pkl'.format(args.data))
     val_data = SkeletonDataset('{0}/val_data.npy'.format(args.data), '{0}/val_label.pkl'.format(args.data))
 
-    train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    val_dataloader = DataLoader(val_data, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
+    val_dataloader = DataLoader(val_data, batch_size=args.batch_size, shuffle=True)
 
     # extract actions from the label file
     with open(args.actions, 'r') as action_names:
@@ -123,6 +123,12 @@ def train(args):
 
     # construct the target model using the CLI arguments
     model = build_model(args)
+    # load the checkpoint if not trained from scratch
+    if args.checkpoint:
+        model.load_state_dict(
+            torch.load(
+                "{0}.model"
+                .format(args.checkpoint)))
 
     # construct a processing wrapper
     trainer = Processor(model, args.num_classes)
@@ -131,7 +137,7 @@ def train(args):
 
     # last dimension is the number of subjects in the scene (2 for datasets used)
     for i in range(data.shape[-1]):
-        print("Training subject: {0}".format(i), flush=True, file=args.log[0])
+        print("Training subject: {0}".format(i), file=args.log[0])
         args.subject = i
 
         # prepare a directory to store results
@@ -147,7 +153,7 @@ def train(args):
             device=device,    
             **vars(args))
     
-    print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
+    print("Training completed in: {0}".format(time.time() - start_time), file=args.log[0])
     # TODO: complete the email notification command
     # os.system('mail -s "status update" maxim.yudayev@kuleuven.be <<< ""')
     return
@@ -217,6 +223,8 @@ if __name__ == '__main__':
             \r\t[--data DATA_DIR]
             \r\t[--actions FILE]
             \r\t[--out OUT_DIR]
+            \r\t[--checkpoint CHECKPOINT]
+            \r\t[--checkpoint_epoch CHCK_PT_EPOCH]
             \r\t[--log O_FILE E_FILE]
             \r\t[-v[vv]]""",
         help='train target ST-GCN network',
@@ -387,6 +395,16 @@ if __name__ == '__main__':
         metavar='',
         help='path to the output directory (default: pretrained_models/kinetics)')
     parser_train_io.add_argument(
+        '--checkpoint',
+        metavar='',
+        default=None,
+        help='path to the checkpoint (default: None)')
+    parser_train_io.add_argument(
+        '--checkpoint_epoch',
+        metavar='',
+        default=None,
+        help='epoch id corresponding to the checkpoint (default: None)')
+    parser_train_io.add_argument(
         '--log',
         nargs=2,
         type=argparse.FileType('w'),
@@ -428,8 +446,7 @@ if __name__ == '__main__':
     parser_benchmark.set_defaults(func=benchmark)
 
     # parse the arguments
-    # args = parser.parse_args(['train']) # uncomment the line during debug
-    args = parser.parse_args()        # uncomment the line during deployment
+    args = parser.parse_args()
 
     # enter the appropriate command
     args.func(args)
