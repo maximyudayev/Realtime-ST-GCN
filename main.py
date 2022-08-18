@@ -137,7 +137,7 @@ def train(args):
     print("Training started", flush=True, file=args.log[0])
 
     # prepare a directory to store results
-    save_dir = "{0}/{1}/split_{2}".format(args.out, args.model, time.time())
+    save_dir = "{0}/{1}/run_{2}".format(args.out, args.model, time.time())
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     
