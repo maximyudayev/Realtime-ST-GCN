@@ -4,8 +4,7 @@ import torch
 import torch.nn as nn
 
 class ConvTemporalGraphical(nn.Module):
-
-    r"""The basic module for applying a graph convolution.
+    """The basic module for applying a graph convolution.
     Args:
         in_channels (int): Number of channels in the input sequence data
         out_channels (int): Number of channels produced by the convolution
@@ -30,35 +29,51 @@ class ConvTemporalGraphical(nn.Module):
             :math:`V` is the number of graph nodes. 
     """
 
-    def __init__(self,
-                 in_channels,
-                 out_channels,
-                 kernel_size,
-                 t_kernel_size=1,
-                 t_stride=1,
-                 t_padding=0,
-                 t_dilation=1,
-                 bias=True):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        partitions,
+        t_kernel_size=1,
+        t_stride=1,
+        t_padding=0,
+        t_dilation=1,
+        bias=True):
+        
         super().__init__()
 
         self.kernel_size = kernel_size
         self.conv = nn.Conv2d(
             in_channels,
-            out_channels * kernel_size,
+            out_channels * partitions,
             kernel_size=(t_kernel_size, 1),
             padding=(t_padding, 0),
             stride=(t_stride, 1),
             dilation=(t_dilation, 1),
             bias=bias)
 
+
     def forward(self, x, A):
-        assert A.size(0) == self.kernel_size
+        """TODO: verify if .view() turns multi-dimensional tensor into a matrix 
+        and does an incorrect dor product.
+        """
 
+        assert A.size(1) == self.kernel_size
+        # updating feature vectors on each joint
         x = self.conv(x)
-
+        # performing spatial accumulation of new feature vectors for each joint
         n, kc, t, v = x.size()
-        x = x.view(n, self.kernel_size, kc//self.kernel_size, t, v)
-        x = torch.einsum('nkctv,kvw->nctw', (x, A))
+        x = x.view(n, A.size(0), kc//A.size(0), t, v)
+        # x = torch.einsum('nkctv,kvw->nctw', (x, A))
+        # !equivalent to:
+        x = x.permute(0, 2, 3, 1, 4).contiguous()
+        n, c, t, k, v = x.size()
+        k, v, w = A.size()
+        x = x.view(n * c * t, k * v)
+        A = A.view(k * v, w)
+        x = torch.mm(x, A)
+        x = x.view(n, c, t, w)
 
         return x.contiguous(), A
         

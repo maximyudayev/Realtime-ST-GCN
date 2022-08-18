@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
 from torch import optim
 import time
+import os
+    
 
 class Processor:
     """ST-GCN processing wrapper for training and testing the model.
@@ -17,8 +18,8 @@ class Processor:
 
     def __init__(
         self,
-        model: nn.Module,
-        num_classes: int):
+        model,
+        num_classes):
         """
         Args:
             model : ``torch.nn.Module``
@@ -33,14 +34,24 @@ class Processor:
         self.num_classes = num_classes
 
 
+    def update_lr(self, learning_rate, learning_rate_decay, epoch):
+        """Decays learning rate monotonically by the provided factor."""
+        
+        rate = learning_rate * pow(learning_rate_decay, epoch)
+        for g in self.optimizer.param_groups:
+            g['lr'] = rate
+
+
     def train(
         self, 
-        save_dir: str, 
-        dataloader: DataLoader,
-        device: torch.device,
-        epochs: int,
-        checkpoints: list[int],
-        learning_rate: float,
+        save_dir, 
+        dataloader,
+        device,
+        epochs,
+        checkpoints,
+        checkpoint,
+        learning_rate,
+        learning_rate_decay,
         **kwargs):
         """Trains the model, given user-defined training parameters.
 
@@ -58,21 +69,42 @@ class Processor:
             self.model = nn.DataParallel(self.model)
         self.model.to(device)
 
-        self.base_lr = learning_rate
+        if checkpoint:
+            state = torch.load(checkpoint, map_location=device)
+            range_epochs = range(state['epoch']+1, epochs)
+        else:
+            range_epochs = range(epochs)
 
         # setup the optimizer
-        optimizer = optim.Adam(self.model.parameters(), lr=self.base_lr)
-        
-        with torch.autograd.set_detect_anomaly(True):
+        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+        # load the checkpoint if not training from scratch
+        if checkpoint:
+            self.optimizer.load_state_dict(state['optimizer_state_dict'])
+
+        with torch.autograd.set_detect_anomaly(True):            
+            # variables for email updates
+            epoch_list = []
+            epoch_loss_list = []
+            top1_acc_list = []
+            top5_acc_list = []
+            time_list = []
+
             # train the model for num_epochs
             # (dataloader is automatically shuffled after each epoch)
-            for epoch in range(epochs):            
+            for epoch in range_epochs:
                 epoch_loss = 0
-                correct = 0
+                top1_correct = 0
+                top5_correct = 0
                 total = 0
 
+                # decay learning rate every 10 epochs [ref: Yan 2018]
+                if (epoch % 10 == 0):
+                    self.update_lr(learning_rate, learning_rate_decay, epoch)
+
+                epoch_start_time = time.time()
+
                 # sweep through the training dataset in minibatches
-                for i, (captures, labels) in enumerate(dataloader):
+                for captures, labels in dataloader:
                     # move both data to the compute device
                     # (captures is a batch of full-length captures, label is a batch of ground truths)
                     captures = captures[:,:,:,:,kwargs['subject']].to(device)
@@ -80,56 +112,92 @@ class Processor:
                     # expanding labels tensor does not allocate new memory, only creates a new view on existing tensor
                     labels = labels[:,None].expand(-1,captures.shape[2]).to(device)
                     
-                    # print('moved data to the device')
                     # zero the gradient buffers
-                    optimizer.zero_grad()
+                    self.optimizer.zero_grad()
                     
                     # make predictions and compute the loss
                     # forward pass the minibatch through the model for the corresponding subject
                     # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
                     # the output tensor has shape (N, C, L)
-                    pred_start = time.time()
                     predictions = self.model(captures)
-                    pred_end = time.time()
-                    print("[epoch {0}]: batch = {1}, pred_time = {2}".format(epoch + 1, i, pred_end-pred_start), flush=True, file=kwargs['log'][0])
 
                     # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
                     # N-batch, C-class, K-extra dimension (capture length)
                     loss = self.ce(predictions, labels)
                     epoch_loss += loss.data.item()
                     
-                    optim_start = time.time()
                     # backward pass to compute the gradients
                     loss.backward()
 
                     # update parameters based on the computed gradients
-                    optimizer.step()
-                    optim_end = time.time()
-                    print("[epoch {0}]: batch = {1}, optim_time = {2}".format(epoch + 1, i, optim_end-optim_start), flush=True, file=kwargs['log'][0])
+                    self.optimizer.step()
 
                     # calculate the predictions statistics
-                    # this only sums the number of correctly predicted frames, but doesn't look at prediction jitter
-                    _, predicted = torch.max(predictions, 1)
-                    
-                    cor = torch.sum(predicted == labels).data.item()
-                    tot = labels.numel()
-                    correct += cor
-                    total += tot
-                    print("[epoch {0}]: batch = {1}, acc = {2}".format(epoch + 1, i, cor/tot), flush=True, file=kwargs['log'][0])
+                    # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
+                    _, top5_predicted = torch.topk(predictions, k=5, dim=1)
+                    top1_predicted = top5_predicted[:,0,:]
 
+                    top1_cor = torch.sum(top1_predicted == labels).data.item()
+                    top1_correct += top1_cor
+                    top5_cor = torch.sum(top5_predicted == labels[:,None,:]).data.item()
+                    top5_correct += top5_cor
+
+                    tot = labels.numel()
+                    total += tot
+
+                epoch_end_time = time.time()
+                
                 # checkpoint the model during training at specified epochs
                 if epoch in checkpoints:
-                    torch.save(self.model.state_dict(), "{0}/epoch-{1}.model".format(save_dir, epoch + 1))
-                    torch.save(optimizer.state_dict(), "{0}/epoch-{1}.opt".format(save_dir, epoch + 1))
+                    torch.save({
+                        "epoch": epoch,
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
+                        "loss": epoch_loss,
+                        }, "{0}/epoch-{1}.pt".format(save_dir, epoch))
                 
-                print("[epoch {0}]: epoch loss = {1}, acc = {2}".format(
-                    epoch + 1, 
-                    epoch_loss / len(dataloader),
-                    float(correct) / total), flush=True, file=kwargs['log'][0])
+                print(
+                    "[epoch {0}]: epoch loss = {1}, top1_acc = {2}, top5_acc = {3}"
+                    .format(
+                        epoch, 
+                        epoch_loss / len(dataloader),
+                        top1_correct / total,
+                        top5_correct / total),
+                    flush=True,
+                    file=kwargs['log'][0])
+                print(
+                    "[epoch {0}]: time = {1}"
+                    .format(
+                        epoch,
+                        epoch_end_time - epoch_start_time),
+                    flush=True,
+                    file=kwargs['log'][0])
+
+                # send an email update
+                epoch_list.insert(0, epoch)
+                epoch_loss_list.insert(0, epoch_loss / len(dataloader))
+                top1_acc_list.insert(0, top1_correct / total)
+                top5_acc_list.insert(0, top5_correct / total)
+                time_list.insert(0, epoch_end_time - epoch_start_time)
+                # format a stats table (in newest to oldest order) and send it by email
+                os.system(
+                    'header="\n %-6s %5s %5s %5s %5s\n";'
+                    'format=" %-03d %4.6f %1.6f %1.6f %5.6f\n";'
+                    'printf "$header" "EPOCH" "LOSS" "TOP1" "TOP5" "TIME" > $PBS_O_WORKDIR/mail_draft.txt;'
+                    'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft.txt;'
+                    'cat $PBS_O_WORKDIR/mail_draft.txt | mail -s "[$PBS_JOBID]: $PBS_JOBNAME status update" maxim.yudayev@kuleuven.be'
+                    .format(
+                        ' '.join([
+                            ' '.join([str(e) for e in t]) for t 
+                            in zip(epoch_list, epoch_loss_list, top1_acc_list, top5_acc_list, time_list)])))
 
             # save the final model
-            torch.save(self.model.state_dict(), "{0}/final.model".format(save_dir))
-            torch.save(optimizer.state_dict(), "{0}/final.opt".format(save_dir))
+            torch.save({
+                "epoch": epoch,
+                "model_state_dict": self.model.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "loss": epoch_loss,
+                }, "{0}/final.pt".format(save_dir))
         return
 
 

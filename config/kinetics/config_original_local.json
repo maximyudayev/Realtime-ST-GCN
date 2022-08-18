@@ -1,13 +1,12 @@
 {
     "model": {
-        "model": "realtime",
+        "model": "original",
         "strategy": "spatial",
         "data": "data/kinetics",
         "out": "pretrained_models/kinetics",
         "actions": "data/kinetics/actions.txt",
         "graph": "data/skeletons/openpose.json",
         "in_feat": 3,
-        "buffer": 1,
         "stages": 1,
         "layers": [9],
         "kernel": [9],

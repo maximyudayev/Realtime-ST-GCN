@@ -1,17 +1,14 @@
-#!/usr/bin/env python
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 from data_prep.dataset import SkeletonDataset
 from models.proposed.st_gcn import Stgcn
-# from models.original.st_gcn import Model as OriginalStgcn
+from models.original.st_gcn import Model as OriginalStgcn
 from processor import Processor
 import st_gcn_parser
 import argparse
 import os
 import sys
 import random
-from typing import Tuple
 import time
 import json
 
@@ -20,7 +17,7 @@ import json
 # 2. Setup all CLI arguments for the 3 commands
 # 3. Provide a way to monitor progress in realtime (e.g. TensorBoard)
 
-def common(args: dict) -> Tuple[dict, dict, torch.device, DataLoader, DataLoader]:
+def common(args):
     """Performs setup common to any ST-GCN model variant.
     
     Only needs to be invoked once for a given problem (train-test, benchmark, etc.). 
@@ -69,7 +66,7 @@ def common(args: dict) -> Tuple[dict, dict, torch.device, DataLoader, DataLoader
     return graph, actions_dict, device, train_dataloader, val_dataloader
 
 
-def build_model(args: dict) -> nn.Module:
+def build_model(args):
     """Builds the selected ST-GCN model variant.
     
     Args:
@@ -97,8 +94,7 @@ def build_model(args: dict) -> nn.Module:
             'Check your config file.')
     
     if args.model == 'original':
-        # model = OriginalStgcn()
-        pass
+        model = OriginalStgcn(**vars(args))
     else:
         # all 3 adapted versions are encapsulated in the same class, training is identical (batch mode),
         # usecase changes applied during inference
@@ -125,6 +121,12 @@ def train(args):
 
     # construct the target model using the CLI arguments
     model = build_model(args)
+    # load the checkpoint if not trained from scratch
+    if args.checkpoint:
+        model.load_state_dict({
+            k.split('module.')[1]: v 
+            for k, v in
+            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
     # construct a processing wrapper
     trainer = Processor(model, args.num_classes)
@@ -150,6 +152,8 @@ def train(args):
             **vars(args))
     
     print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
+    # TODO: complete the email notification command
+    # os.system('mail -s "status update" maxim.yudayev@kuleuven.be <<< ""')
     return
 
 
@@ -212,11 +216,13 @@ if __name__ == '__main__':
             \r\t[--epochs EPOCHS]
             \r\t[--checkpoints [CHECKPOINTS]]
             \r\t[--learning_rate RATE]
+            \r\t[--learning_rate_decay RATE_DECAY]
             \r\t[--batch_size BATCH]
 
             \r\t[--data DATA_DIR]
             \r\t[--actions FILE]
             \r\t[--out OUT_DIR]
+            \r\t[--checkpoint CHECKPOINT]
             \r\t[--log O_FILE E_FILE]
             \r\t[-v[vv]]""",
         help='train target ST-GCN network',
@@ -367,7 +373,12 @@ if __name__ == '__main__':
         '--learning_rate',
         type=float,
         metavar='',
-        help='learning rate of the optimizer (default: 0.0005)')
+        help='learning rate of the optimizer (default: 0.01)')
+    parser_train_optim.add_argument(
+        '--learning_rate_decay',
+        type=float,
+        metavar='',
+        help='learning rate decay factor of the optimizer (default: 0.1)')
     parser_train_optim.add_argument(
         '--batch_size',
         type=int,
@@ -386,6 +397,12 @@ if __name__ == '__main__':
         '--out',
         metavar='',
         help='path to the output directory (default: pretrained_models/kinetics)')
+    parser_train_io.add_argument(
+        '--checkpoint',
+        type=str,
+        metavar='',
+        default=None,
+        help='path to the checkpoint to restore states from (default: None)')
     parser_train_io.add_argument(
         '--log',
         nargs=2,
@@ -428,8 +445,7 @@ if __name__ == '__main__':
     parser_benchmark.set_defaults(func=benchmark)
 
     # parse the arguments
-    args = parser.parse_args(['train']) # uncomment the line during debug
-    # args = parser.parse_args()        # uncomment the line during deployment
+    args = parser.parse_args()
 
     # enter the appropriate command
     args.func(args)

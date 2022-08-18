@@ -1,5 +1,4 @@
 import numpy as np
-from numpy.typing import NDArray
 
 class Graph():
     """The Graph to model the node relationships in a skeleton.
@@ -27,12 +26,12 @@ class Graph():
 
     def __init__(
         self,
-        num_node: int,
-        edge: list[list[int]],
-        center: int,
-        strategy: str ='spatial',
-        max_hop: int = 1,
-        dilation: int = 1) -> None:
+        num_node,
+        edge,
+        center,
+        strategy = 'spatial',
+        max_hop = 1,
+        dilation = 1):
         """
         Args:
             num_node : ``int``
@@ -70,11 +69,11 @@ class Graph():
         self.A = self.get_adjacency(strategy)
 
 
-    def __str__(self) -> NDArray[np.float64]:
+    def __str__(self):
         return self.A
 
 
-    def get_adjacency(self, strategy: str) -> NDArray[np.float64]:
+    def get_adjacency(self, strategy):
         """Computes the adjacency matrix based on the edge list and partitioning strategy.
 
         Uses symmetric normalization method.
@@ -139,7 +138,7 @@ class Graph():
             raise ValueError("Strategy Does Not Exist.")
 
 
-    def get_hop_distance(self) -> NDArray[np.float64]:
+    def get_hop_distance(self):
         """Computes the distance between nodes.        
 
         Returns:
@@ -160,7 +159,7 @@ class Graph():
         return hop_dis
 
 
-    def normalize_digraph(self, A: NDArray[np.float64]) -> NDArray[np.float64]:
+    def normalize_digraph(self, A):
         """Asymmetric normalization with the degree matrix.
 
         Args:
@@ -181,7 +180,7 @@ class Graph():
         return AD
 
 
-    def normalize_undigraph(self, A: NDArray[np.float64]) -> NDArray[np.float64]:
+    def normalize_undigraph(self, A):
         """Symmetric normalization with the degree matrix.
 
         Args:

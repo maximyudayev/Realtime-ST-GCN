@@ -1,11 +1,19 @@
 # directories in any part of the tree
-.vscode
 __pycache__
 debug
 
 # exact directories
+.vscode/*
 data/*
 pretrained_models/
 
 # exceptions
 !data/skeletons
+!.vscode/launch.json
+!.vscode/launch_local.json
+
+# file extensions
+*.prof
+
+# named files anywhere
+mail_draft.txt
