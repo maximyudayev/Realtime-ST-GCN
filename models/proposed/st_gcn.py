@@ -169,6 +169,13 @@ class Stgcn(nn.Module):
 
 
     def forward(self, x):
+        N, C, L, V, M = x.size()
+        # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
+        # this incures extra overhead
+        x = x.permute(0, 4, 1, 2, 3).contiguous()
+        x = x.view(N * M, C, L, V)
+        # (N',C,L,V)
+        
         # normalize the input frame
         x = self.bn_in(x)
 

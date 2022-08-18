@@ -134,26 +134,24 @@ def train(args):
     start_time = time.time()
 
     # last dimension is the number of subjects in the scene (2 for datasets used)
-    for i in range(data.shape[-1]):
-        print("Training subject: {0}".format(i), flush=True, file=args.log[0])
-        args.subject = i
+    print("Training started", flush=True, file=args.log[0])
 
-        # prepare a directory to store results
-        save_dir = "{0}/{1}/split_{1}_{2}".format(args.out, args.model, i, time.time())
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        
-        # perform the training
-        # (the model will be further trained/improved on the 2nd subject)
-        trainer.train(
-            save_dir=save_dir,
-            dataloader=train_dataloader,
-            device=device,    
-            **vars(args))
+    # prepare a directory to store results
+    save_dir = "{0}/{1}/split_{2}".format(args.out, args.model, time.time())
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    
+    # perform the training
+    # (the model will be further trained/improved on the 2nd subject)
+    trainer.train(
+        save_dir=save_dir,
+        dataloader=train_dataloader,
+        device=device,    
+        **vars(args))
     
     print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
-    # TODO: complete the email notification command
-    # os.system('mail -s "status update" maxim.yudayev@kuleuven.be <<< ""')
+    os.system('mail -s "[$PBS_JOBID]: $PBS_JOBNAME - COMPLETED" maxim.yudayev@kuleuven.be <<< ""')
+
     return
 
 

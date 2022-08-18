@@ -105,12 +105,15 @@ class Processor:
 
                 # sweep through the training dataset in minibatches
                 for captures, labels in dataloader:
+                    N, _, L, _, M = captures.size()
                     # move both data to the compute device
                     # (captures is a batch of full-length captures, label is a batch of ground truths)
-                    captures = captures[:,:,:,:,kwargs['subject']].to(device)
+                    captures = captures.to(device)
                     # broadcast the labels across the capture length dimension for framewise comparison to predictions
                     # expanding labels tensor does not allocate new memory, only creates a new view on existing tensor
-                    labels = labels[:,None].expand(-1,captures.shape[2]).to(device)
+                    labels = labels.to(device)
+                    labels = labels[:,None,None].expand(-1,L,M)
+                    labels = labels.permute(0,2,1).contiguous().view(N*N,L)
                     
                     # zero the gradient buffers
                     self.optimizer.zero_grad()
@@ -122,7 +125,7 @@ class Processor:
                     predictions = self.model(captures)
 
                     # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
-                    # N-batch, C-class, K-extra dimension (capture length)
+                    # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
                     loss = self.ce(predictions, labels)
                     epoch_loss += loss.data.item()
                     
@@ -201,7 +204,7 @@ class Processor:
         return
 
 
-    # def predict(
+    # def test(
     #     self, 
     #     model_dir, 
     #     results_dir, 
