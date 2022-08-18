@@ -488,16 +488,16 @@ class StgcnLayer(nn.Module):
         self.out_channels = out_channels
         
         # lower triangle matrix for temporal accumulation that mimics FIFO behavior
-        lt_matrix = torch.zeros(capture_length, capture_length)
-        for i in range(kernel_size):
-            lt_matrix += F.pad(
-                torch.eye(
-                    capture_length - stride * i), 
-                (0,i*stride,i*stride,0))
-        lt_matrix = torch.transpose(lt_matrix,0,1)
+        lt_matrix = torch.zeros(capture_length, capture_length) 
+        for i in range(kernel_size): 
+            lt_matrix += F.pad( 
+                torch.eye( 
+                    capture_length - stride * i),  
+                (0,i*stride,i*stride,0)) 
+        lt_matrix = torch.transpose(lt_matrix,0,1) 
         # must register matrix as a buffer to automatically move to GPU with model.to_device()
         # for PyTorch v1.0.1
-        self.register_buffer('lt_matrix', lt_matrix)
+        self.register_buffer('lt_matrix', lt_matrix) 
 
         # convolution of incoming frame 
         # (out_channels is a multiple of the partition number
@@ -531,36 +531,36 @@ class StgcnLayer(nn.Module):
 
 
     def forward(self, x, A):
-        # residual branch
-        res = self.residual(x)
-        
-        # spatial convolution of incoming frame (node-wise)
-        a = self.conv(x)
-
-        # convert to the expected dimension order and add the partition dimension
-        # reshape the tensor for multiplication with the adjacency matrix
-        # (convolution output contains all partitions, stacked across the channel dimension)
-        # split into separate 4D tensors, each corresponding to a separate partition
-        b = torch.split(a, self.out_channels, dim=1)
-        # concatenate these 4D tensors across the partition dimension
-        c = torch.stack(b, -1)
-        # change the dimension order for the correct broadcating of the adjacency matrix
-        # (N,C,L,V,P) -> (N,L,P,C,V)
-        d = c.permute(0,2,4,1,3)
-        # single multiplication with the adjacency matrices (spatial selective addition, across partitions)
-        e = torch.matmul(d, A)
-
-        # sum temporally by multiplying features with the Toeplitz matrix
-        # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L)
-        f = e.permute(0,2,3,4,1)
-        g = torch.matmul(f, self.lt_matrix)
-        # sum across partitions (N,C,V,L)
-        h = torch.sum(g, dim=(1))
-        # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V)
-        i = h.permute(0,1,3,2)
-
-        # normalize the output of the st-gcn operation and activate
-        j = self.bn_relu(i)
-
-        # add the branches (main + residual), activate and dropout
-        return self.do(j + res)
+        # residual branch 
+        res = self.residual(x) 
+         
+        # spatial convolution of incoming frame (node-wise) 
+        a = self.conv(x) 
+ 
+        # convert to the expected dimension order and add the partition dimension 
+        # reshape the tensor for multiplication with the adjacency matrix 
+        # (convolution output contains all partitions, stacked across the channel dimension) 
+        # split into separate 4D tensors, each corresponding to a separate partition 
+        b = torch.split(a, self.out_channels, dim=1) 
+        # concatenate these 4D tensors across the partition dimension 
+        c = torch.stack(b, -1) 
+        # change the dimension order for the correct broadcating of the adjacency matrix 
+        # (N,C,L,V,P) -> (N,L,P,C,V) 
+        d = c.permute(0,2,4,1,3) 
+        # single multiplication with the adjacency matrices (spatial selective addition, across partitions) 
+        e = torch.matmul(d, A) 
+ 
+        # sum temporally by multiplying features with the Toeplitz matrix 
+        # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L) 
+        f = e.permute(0,2,3,4,1) 
+        g = torch.matmul(f, self.lt_matrix) 
+        # sum across partitions (N,C,V,L) 
+        h = torch.sum(g, dim=(1)) 
+        # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V) 
+        i = h.permute(0,1,3,2) 
+ 
+        # normalize the output of the st-gcn operation and activate 
+        j = self.bn_relu(i) 
+ 
+        # add the branches (main + residual), activate and dropout 
+        return self.do(j + res) 
