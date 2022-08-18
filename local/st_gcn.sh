@@ -7,7 +7,8 @@ fi
 
 (>&2 echo 'starting computation')
 # Execute and time the script
-time python3 ../main.py train
+# time python3 ../main.py train
 
 # Execute and profile the script
-# python3 -m cProfile -s time -o st-gcn.prof ../main.py train
+python3 -m cProfile -s time -o st-gcn-proposed.prof main.py train
+python3 -m cProfile -s time -o st-gcn-original.prof main.py train --config config/kinetics/config_original_local.json
