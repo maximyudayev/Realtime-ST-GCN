@@ -100,26 +100,34 @@ class Model(nn.Module):
 
 
     def extract_feature(self, x):
-
         # data normalization
         N, C, T, V, M = x.size()
+        # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
+        # this incures extra overhead
         x = x.permute(0, 4, 3, 1, 2).contiguous()
+        # (N,M,V,C,T)
         x = x.view(N * M, V * C, T)
         x = self.data_bn(x)
         x = x.view(N, M, V, C, T)
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = x.view(N * M, C, T, V)
+        # (N',C,T,V)
+
+        # remap the features to the network size
+        x = self.fcn_in(x)
 
         # forward
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
             x, _ = gcn(x, self.A * importance)
 
-        _, c, t, v = x.size()
-        feature = x.view(N, M, c, t, v).permute(0, 2, 3, 4, 1)
+        # global pooling
+        x = F.avg_pool2d(x, (1, x.size()[-1]))
+
+        feature = x.squeeze(-1)
 
         # prediction
         x = self.fcn(x)
-        output = x.view(N, M, -1, t, v).permute(0, 2, 3, 4, 1)
+        output = x.squeeze(-1)
 
         return output, feature
 

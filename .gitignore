@@ -10,7 +10,6 @@ pretrained_models/
 # exceptions
 !data/skeletons
 !.vscode/launch.json
-!.vscode/launch_local.json
 
 # file extensions
 *.prof

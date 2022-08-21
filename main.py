@@ -13,9 +13,8 @@ import time
 import json
 
 # TODO:
-# 1. Implement test/benchmark functions for multi-GPU functions
+# 1. Implement benchmark functions for multi-GPU functions
 # 2. Setup all CLI arguments for the 3 commands
-# 3. Provide a way to monitor progress in realtime (e.g. TensorBoard)
 
 def common(args):
     """Performs setup common to any ST-GCN model variant.
@@ -112,10 +111,10 @@ def train(args):
     """
 
     # perform common setup around the model's black box
-    args.graph, actions, device, train_dataloader, _ = common(args)
+    args.graph, actions, device, train_dataloader, val_dataloader = common(args)
     args.num_classes = len(actions)
     
-    # split between the subjects in the captures
+    # record the length of captures
     data, _ = next(iter(train_dataloader))
     args.capture_length = data.shape[2]
 
@@ -137,20 +136,33 @@ def train(args):
     print("Training started", flush=True, file=args.log[0])
 
     # prepare a directory to store results
-    save_dir = "{0}/{1}/run_{2}".format(args.out, args.model, time.time())
+    if not os.getenv('PBS_JOBID'):
+        with open('.vscode/pbs_jobid.txt', 'r+') as f:
+            job_id = f.readline()
+            os.environ['PBS_JOBID'] = job_id
+            f.seek(0)
+            f.write(str(int(job_id)+1))
+            f.truncate()
+    
+    save_dir = "{0}/{1}/run_{2}".format(args.out, args.model, os.getenv('PBS_JOBID').split('.')[0])
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     
     # perform the training
-    # (the model will be further trained/improved on the 2nd subject)
+    # (the model is trained on all skeletons in the scene, simultaneously)
     trainer.train(
         save_dir=save_dir,
-        dataloader=train_dataloader,
+        train_dataloader=train_dataloader,
+        val_dataloader=val_dataloader,
         device=device,    
         **vars(args))
     
     print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
-    os.system('mail -s "[$PBS_JOBID]: $PBS_JOBNAME - COMPLETED" maxim.yudayev@kuleuven.be <<< ""')
+    
+    os.system(
+        'mail -s "[{0}]: $PBS_JOBNAME - COMPLETED" maxim.yudayev@kuleuven.be <<< ""'
+        .format(
+            os.getenv('PBS_JOBID').split('.')[0]))
 
     return
 
@@ -163,7 +175,52 @@ def test(args):
             Parsed CLI arguments.
     """
 
-    # trainer.predict(model_dir, results_dir, features_path, vid_list_file_tst, num_epochs, actions_dict, device,)
+    # perform common setup around the model's black box
+    args.graph, actions, device, _, val_dataloader = common(args)
+    args.num_classes = len(actions)
+    
+    # split between the subjects in the captures
+    data, _ = next(iter(val_dataloader))
+    args.capture_length = data.shape[2]
+
+    # construct the target model using the CLI arguments
+    model = build_model(args)
+    # load the checkpoint if not trained from scratch
+    if args.checkpoint:
+        model.load_state_dict({
+            k.split('module.')[1]: v 
+            for k, v in
+            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+
+    # construct a processing wrapper
+    trainer = Processor(model, args.num_classes)
+
+    start_time = time.time()
+
+    # last dimension is the number of subjects in the scene (2 for datasets used)
+    print("Testing started", flush=True, file=args.log[0])
+
+    # prepare a directory to store results
+    if not os.getenv('PBS_JOBID'):
+        with open('.vscode/pbs_jobid.txt', 'r+') as f:
+            job_id = f.readline()
+            os.environ['PBS_JOBID'] = job_id
+            f.seek(0)
+            f.write(str(int(job_id)+1))
+            f.truncate()
+    
+    save_dir = "{0}/{1}/run_{2}".format(args.out, args.model, os.getenv('PBS_JOBID').split('.')[0])
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    
+    # perform the testing
+    trainer.test(save_dir, val_dataloader, device, **vars(args))
+    
+    print("Testing completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
+    
+    os.system(
+        'mail -s "[{0}]: $PBS_JOBNAME - COMPLETED" maxim.yudayev@kuleuven.be <<< ""'
+        .format(os.getenv('PBS_JOBID').split('.')[0]))
 
     return
 
@@ -171,10 +228,63 @@ def test(args):
 def benchmark(args):
     """Entry point for benchmarking functionality of multiple pretrained models.
 
+    TODO: complete
+
     Args:
         args : ``dict``
             Parsed CLI arguments.
     """
+
+    # perform common setup around the model's black box
+    args.graph, actions, device, _, val_dataloader = common(args)
+    args.num_classes = len(actions)
+    
+    # split between the subjects in the captures
+    data, _ = next(iter(val_dataloader))
+    args.capture_length = data.shape[2]
+
+    # construct the target models using the CLI arguments
+    models = []
+    for m in args.models:
+        model = build_model(m)
+        
+        model.load_state_dict({
+            k.split('module.')[1]: v 
+            for k, v in
+            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+
+        models.append(model)
+
+    # construct a processing wrapper
+    trainer = Processor(model, args.num_classes)
+
+    start_time = time.time()
+
+    # last dimension is the number of subjects in the scene (2 for datasets used)
+    print("Testing started", flush=True, file=args.log[0])
+
+    # prepare a directory to store results
+    if not os.getenv('PBS_JOBID'):
+        with open('.vscode/pbs_jobid.txt', 'r+') as f:
+            job_id = f.readline()
+            os.environ['PBS_JOBID'] = job_id
+            f.seek(0)
+            f.write(str(int(job_id)+1))
+            f.truncate()
+    
+    save_dir = "{0}/{1}/run_{2}".format(args.out, args.model, os.getenv('PBS_JOBID').split('.')[0])
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    
+    # perform the testing
+    trainer.test(save_dir, val_dataloader, device, **vars(args))
+
+    print("Benchmarking completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
+    
+    os.system(
+        'mail -s "[{0}]: $PBS_JOBNAME - COMPLETED" maxim.yudayev@kuleuven.be <<< ""'
+        .format(
+            os.getenv('PBS_JOBID').split('.')[0]))
 
     return
 

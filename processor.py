@@ -1,9 +1,83 @@
 import torch
 import torch.nn as nn
 from torch import optim
+import pandas as pd
 import time
 import os
     
+
+def validate_(
+    model,
+    num_classes,
+    dataloader,
+    device,
+    **kwargs):
+    """Routine for model validation.
+
+    Shared between train and test scripts: train invokes it after each epoch trained,
+    test invokes it once for inference only.
+    """
+
+    # do not record gradients
+    with torch.no_grad():    
+        top1_correct = 0
+        top5_correct = 0
+        total = 0
+
+        test_start_time = time.time()
+
+        confusion_matrix = torch.zeros(num_classes, num_classes, device=device)
+        total_per_class = torch.zeros(1, num_classes, device=device)
+
+        # sweep through the training dataset in minibatches
+        for captures, labels in dataloader:
+            N, _, L, _, M = captures.size()
+            # move both data to the compute device
+            # (captures is a batch of full-length captures, label is a batch of ground truths)
+            captures = captures.to(device)
+            # broadcast the labels across the capture length dimension for framewise comparison to predictions
+            # expanding labels tensor does not allocate new memory, only creates a new view on existing tensor
+            labels = labels.to(device)
+            labels = labels[:,None,None].expand(-1,L,M)
+            labels = labels.permute(0,2,1).contiguous().view(N*M,L)
+            
+            # make predictions and compute the loss
+            # forward pass the minibatch through the model for the corresponding subject
+            # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
+            # the output tensor has shape (N, C, L)
+            predictions = model(captures)
+            
+            # calculate the predictions statistics
+            # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
+            _, top5_predicted = torch.topk(predictions, k=5, dim=1)
+            top1_predicted = top5_predicted[:,0,:]
+
+            top1_cor = torch.sum(top1_predicted == labels).data.item()
+            top1_correct += top1_cor
+            top5_cor = torch.sum(top5_predicted == labels[:,None,:]).data.item()
+            top5_correct += top5_cor
+
+            tot = labels.numel()
+            total += tot
+
+            # collect the correct predictions for each class and total per that class
+            for batch_el in range(N*M):
+                top1_predicted_ohe = torch.zeros(L, num_classes)
+                top1_predicted_ohe[range(L), top1_predicted[batch_el]] = 1
+                confusion_matrix[labels[batch_el, 0]] += top1_predicted_ohe.sum(dim=0)
+                total_per_class[:,labels[batch_el, 0]] += L
+                
+        test_end_time = time.time()
+
+        # normalize each row of the confusion matrix to obtain class probabilities
+        confusion_matrix = torch.div(confusion_matrix, total_per_class.T)
+
+        top1_acc = top1_cor / total
+        top5_acc = top5_cor / total
+        duration = test_end_time - test_start_time
+
+    return top1_acc, top5_acc, duration, confusion_matrix
+
 
 class Processor:
     """ST-GCN processing wrapper for training and testing the model.
@@ -45,7 +119,8 @@ class Processor:
     def train(
         self, 
         save_dir, 
-        dataloader,
+        train_dataloader,
+        val_dataloader,
         device,
         epochs,
         checkpoints,
@@ -58,10 +133,6 @@ class Processor:
         TODO:
             ``1.`` Provide useful prediction statistics (e.g. IoU, jitter, etc.).
         """
-
-        # set layers to training mode if behavior of any differs between train and prediction
-        # (prepares Dropout and BatchNormalization layers to disable and to learn parameters, respectively)
-        self.model.train()
 
         # move the model to the compute device(s) if available (CPU, GPU, TPU, etc.)
         if torch.cuda.device_count() > 1:
@@ -81,187 +152,237 @@ class Processor:
         if checkpoint:
             self.optimizer.load_state_dict(state['optimizer_state_dict'])
 
-        with torch.autograd.set_detect_anomaly(True):            
-            # variables for email updates
-            epoch_list = []
-            epoch_loss_list = []
-            top1_acc_list = []
-            top5_acc_list = []
-            time_list = []
+        # variables for email updates
+        epoch_list = []
+        epoch_loss_list = []
+        top1_acc_train_list = []
+        top5_acc_train_list = []
+        duration_train_list = []
+        top1_acc_val_list = []
+        top5_acc_val_list = []
+        duration_val_list = []
 
-            # train the model for num_epochs
-            # (dataloader is automatically shuffled after each epoch)
-            for epoch in range_epochs:
-                epoch_loss = 0
-                top1_correct = 0
-                top5_correct = 0
-                total = 0
+        # train the model for num_epochs
+        # (dataloader is automatically shuffled after each epoch)
+        for epoch in range_epochs:
+            if (epoch == 50): break
 
-                # decay learning rate every 10 epochs [ref: Yan 2018]
-                if (epoch % 10 == 0):
-                    self.update_lr(learning_rate, learning_rate_decay, epoch)
+            # set layers to training mode if behavior of any differs between train and prediction
+            # (prepares Dropout and BatchNormalization layers to disable and to learn parameters, respectively)
+            self.model.train()
 
-                epoch_start_time = time.time()
+            epoch_loss = 0
+            top1_correct = 0
+            top5_correct = 0
+            total = 0
 
-                # sweep through the training dataset in minibatches
-                for captures, labels in dataloader:
-                    N, _, L, _, M = captures.size()
-                    # move both data to the compute device
-                    # (captures is a batch of full-length captures, label is a batch of ground truths)
-                    captures = captures.to(device)
-                    # broadcast the labels across the capture length dimension for framewise comparison to predictions
-                    # expanding labels tensor does not allocate new memory, only creates a new view on existing tensor
-                    labels = labels.to(device)
-                    labels = labels[:,None,None].expand(-1,L,M)
-                    labels = labels.permute(0,2,1).contiguous().view(N*N,L)
-                    
-                    # zero the gradient buffers
-                    self.optimizer.zero_grad()
-                    
-                    # make predictions and compute the loss
-                    # forward pass the minibatch through the model for the corresponding subject
-                    # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
-                    # the output tensor has shape (N, C, L)
-                    predictions = self.model(captures)
+            # decay learning rate every 10 epochs [ref: Yan 2018]
+            if (epoch % 10 == 0):
+                self.update_lr(learning_rate, learning_rate_decay, epoch//10)
 
-                    # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
-                    # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
-                    loss = self.ce(predictions, labels)
-                    epoch_loss += loss.data.item()
-                    
-                    # backward pass to compute the gradients
-                    loss.backward()
+            epoch_start_time = time.time()
 
-                    # update parameters based on the computed gradients
-                    self.optimizer.step()
-
-                    # calculate the predictions statistics
-                    # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
-                    _, top5_predicted = torch.topk(predictions, k=5, dim=1)
-                    top1_predicted = top5_predicted[:,0,:]
-
-                    top1_cor = torch.sum(top1_predicted == labels).data.item()
-                    top1_correct += top1_cor
-                    top5_cor = torch.sum(top5_predicted == labels[:,None,:]).data.item()
-                    top5_correct += top5_cor
-
-                    tot = labels.numel()
-                    total += tot
-
-                epoch_end_time = time.time()
+            # sweep through the training dataset in minibatches
+            for captures, labels in train_dataloader:
+                N, _, L, _, M = captures.size()
+                # move both data to the compute device
+                # (captures is a batch of full-length captures, label is a batch of ground truths)
+                captures = captures.to(device)
+                # broadcast the labels across the capture length dimension for framewise comparison to predictions
+                # expanding labels tensor does not allocate new memory, only creates a new view on existing tensor
+                labels = labels.to(device)
+                labels = labels[:,None,None].expand(-1,L,M)
+                labels = labels.permute(0,2,1).contiguous().view(N*M,L)
                 
-                # checkpoint the model during training at specified epochs
-                if epoch in checkpoints:
-                    torch.save({
-                        "epoch": epoch,
-                        "model_state_dict": self.model.state_dict(),
-                        "optimizer_state_dict": self.optimizer.state_dict(),
-                        "loss": epoch_loss,
-                        }, "{0}/epoch-{1}.pt".format(save_dir, epoch))
+                # zero the gradient buffers
+                self.optimizer.zero_grad()
                 
-                print(
-                    "[epoch {0}]: epoch loss = {1}, top1_acc = {2}, top5_acc = {3}"
-                    .format(
-                        epoch, 
-                        epoch_loss / len(dataloader),
-                        top1_correct / total,
-                        top5_correct / total),
-                    flush=True,
-                    file=kwargs['log'][0])
-                print(
-                    "[epoch {0}]: time = {1}"
-                    .format(
-                        epoch,
-                        epoch_end_time - epoch_start_time),
-                    flush=True,
-                    file=kwargs['log'][0])
+                # make predictions and compute the loss
+                # forward pass the minibatch through the model for the corresponding subject
+                # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
+                # the output tensor has shape (N, C, L)
+                predictions = self.model(captures)
 
-                # send an email update
-                epoch_list.insert(0, epoch)
-                epoch_loss_list.insert(0, epoch_loss / len(dataloader))
-                top1_acc_list.insert(0, top1_correct / total)
-                top5_acc_list.insert(0, top5_correct / total)
-                time_list.insert(0, epoch_end_time - epoch_start_time)
-                # format a stats table (in newest to oldest order) and send it by email
-                os.system(
-                    'header="\n %-6s %5s %5s %5s %5s\n";'
-                    'format=" %-03d %4.6f %1.6f %1.6f %5.6f\n";'
-                    'printf "$header" "EPOCH" "LOSS" "TOP1" "TOP5" "TIME" > $PBS_O_WORKDIR/mail_draft.txt;'
-                    'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft.txt;'
-                    'cat $PBS_O_WORKDIR/mail_draft.txt | mail -s "[$PBS_JOBID]: $PBS_JOBNAME status update" maxim.yudayev@kuleuven.be'
-                    .format(
-                        ' '.join([
-                            ' '.join([str(e) for e in t]) for t 
-                            in zip(epoch_list, epoch_loss_list, top1_acc_list, top5_acc_list, time_list)])))
+                # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
+                # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
+                loss = self.ce(predictions, labels)
+                epoch_loss += loss.data.item()
+                
+                # backward pass to compute the gradients
+                loss.backward()
 
-            # save the final model
-            torch.save({
-                "epoch": epoch,
-                "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
-                "loss": epoch_loss,
-                }, "{0}/final.pt".format(save_dir))
+                # update parameters based on the computed gradients
+                self.optimizer.step()
+
+                # calculate the predictions statistics
+                # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
+                _, top5_predicted = torch.topk(predictions, k=5, dim=1)
+                top1_predicted = top5_predicted[:,0,:]
+
+                top1_cor = torch.sum(top1_predicted == labels).data.item()
+                top1_correct += top1_cor
+                top5_cor = torch.sum(top5_predicted == labels[:,None,:]).data.item()
+                top5_correct += top5_cor
+
+                tot = labels.numel()
+                total += tot
+
+            epoch_end_time = time.time()
+            duration_train = epoch_end_time - epoch_start_time
+            top1_acc_train = top1_correct / total
+            top5_acc_train = top5_correct / total
+            
+            # checkpoint the model during training at specified epochs
+            if epoch in checkpoints:
+                torch.save({
+                    "epoch": epoch,
+                    "model_state_dict": self.model.state_dict(),
+                    "optimizer_state_dict": self.optimizer.state_dict(),
+                    "loss": epoch_loss,
+                    }, "{0}/epoch-{1}.pt".format(save_dir, epoch))
+            
+            # set layers to inference mode if behavior differs between train and prediction
+            # (prepares Dropout and BatchNormalization layers to enable and to freeze parameters, respectively)
+            self.model.eval()
+
+            # test the model on the validation set
+            top1_acc_val, top5_acc_val, duration_val, confusion_matrix = validate_(
+                model=self.model, 
+                num_classes=self.num_classes,
+                dataloader=val_dataloader,
+                device=device)
+
+            # save confusion matrix as a CSV file
+            pd.DataFrame(confusion_matrix.numpy()).to_csv('{0}/confusion_matrix_epoch-{1}.csv'.format(save_dir, epoch))
+
+            # log and send notifications
+            print(
+                "[epoch {0}]: epoch loss = {1}, top1_acc_train = {2}, top5_acc_train = {3}, top1_acc_val = {4}, top5_acc_val = {5}"
+                .format(
+                    epoch, 
+                    epoch_loss / len(train_dataloader),
+                    top1_acc_train,
+                    top5_acc_train,
+                    top1_acc_val,
+                    top5_acc_val),
+                flush=True,
+                file=kwargs['log'][0])
+            print(
+                "[epoch {0}]: train_time = {1}, val_time = {2}"
+                .format(
+                    epoch,
+                    duration_train,
+                    duration_val),
+                flush=True,
+                file=kwargs['log'][0])
+
+            # send an email update
+            epoch_list.insert(0, epoch)
+            epoch_loss_list.insert(0, epoch_loss / len(train_dataloader))
+            top1_acc_train_list.insert(0, top1_acc_train)
+            top5_acc_train_list.insert(0, top5_acc_train)
+            duration_train_list.insert(0, duration_train)
+            top1_acc_val_list.insert(0, top1_acc_val)
+            top5_acc_val_list.insert(0, top5_acc_val)
+            duration_val_list.insert(0, duration_val)
+
+            # format a stats table (in newest to oldest order) and send it by email
+            os.system(
+                'header="\n %-6s %5s %11s %11s %9s %9s %11s %9s\n";'
+                'format=" %-03d %4.6f %1.4f %1.4f %1.4f %1.4f %5.6f %5.6f\n";'
+                'printf "$header" "EPOCH" "LOSS" "TOP1_TRAIN" "TOP5_TRAIN" "TOP1_VAL" "TOP5_VAL" "TIME_TRAIN" "TIME_VAL" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
+                'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
+                'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: $PBS_JOBNAME status update" maxim.yudayev@kuleuven.be'
+                .format(
+                    ' '.join([
+                        ' '.join([str(e) for e in t]) for t 
+                        in zip(
+                            epoch_list,
+                            epoch_loss_list,
+                            top1_acc_train_list,
+                            top5_acc_train_list,
+                            top1_acc_val_list,
+                            top5_acc_val_list,
+                            duration_train_list,
+                            duration_val_list)]),
+                    os.getenv('PBS_JOBID').split('.')[0]))
+
+        # save the final model
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "loss": epoch_loss,
+            }, "{0}/final.pt".format(save_dir))
+
+        # save train-validation curve as a CSV file
+        pd.DataFrame(
+            index=[0],
+            data={
+                'top1_train': top1_acc_train,
+                'top1_val': top1_acc_val,
+                'top5_train': top5_acc_train,
+                'top5_val': top5_acc_val
+            }).to_csv('{0}/train-validation-curve.csv'.format(save_dir))
         return
 
 
-    # def test(
-    #     self, 
-    #     model_dir, 
-    #     results_dir, 
-    #     features_path, 
-    #     vid_list_file, 
-    #     epoch, 
-    #     actions_dict, 
-    #     device, 
-    #     sample_rate):
-    #     """Performs only the forward pass for inference.
-    #     """
+    def test(
+        self,
+        save_dir,
+        dataloader,
+        device,
+        **kwargs):
+        """Performs only the forward pass for inference.
+        """
         
-    #     self.model.eval()
+        # set layers to inference mode if behavior differs between train and prediction
+        # (prepares Dropout and BatchNormalization layers to enable and to freeze parameters, respectively)
+        self.model.eval()
         
-    #     with torch.no_grad():
-    #         self.model.to(device)
-    #         self.model.load_state_dict(torch.load(model_dir + "/epoch-" + str(epoch) + ".model"))
-    #         file_ptr = open(vid_list_file, 'r')
-    #         list_of_vids = file_ptr.read().split('\n')[:-1]
-    #         file_ptr.close()
-    #         for vid in list_of_vids:
-    #             string2 = vid[:-10]
-    #             features = np.load(features_path + string2 + 'input' + '.npy')
-    #             features = get_features(features)
-    #             features = features[:, ::sample_rate, :, :]
-    #             input_x = torch.tensor(features, dtype=torch.float)
-    #             input_x.unsqueeze_(0)
-    #             N, C, T, V, M = input_x.size()
-    #             input_x = input_x.to(device)
-    #             predictions = self.model(input_x, torch.ones(N,2,T).to(device))
-    #             _, predicted = torch.max(predictions[-1].data, 1)
-    #             predicted = predicted.squeeze().data.detach().cpu().numpy()
-    #             recognition = []
-    #             for i in range(len(predicted)):
-    #                 recognition = np.concatenate((recognition, [list(actions_dict.keys())[list(actions_dict.values()).index(predicted[i].item())]]*sample_rate))
-    #             f_name = vid[:-4]
-    #             f_ptr = open(results_dir + "/" + f_name, "w")
-    #             f_ptr.write("### Frame level recognition: ###\n")
-    #             f_ptr.write(' '.join(recognition))
-    #             f_ptr.close()
+        # move the model to the compute device(s) if available (CPU, GPU, TPU, etc.)
+        if torch.cuda.device_count() > 1:
+            print("Using", torch.cuda.device_count(), "allocated GPUs", flush=True, file=kwargs['log'][0])
+            self.model = nn.DataParallel(self.model)
+        self.model.to(device)
 
-    #     ##################################################
-    #     # TODO:
-    #     ##################################################
-    #     with torch.no_grad():
-    #         for data in testloader:
-    #             images, labels = data
-    #             outputs = net(images)
-    #             _, predictions = torch.max(outputs, 1)
-    #             # collect the correct predictions for each class
-    #             for label, prediction in zip(labels, predictions):
-    #                 if label == prediction:
-    #                     correct_pred[classes[label]] += 1
-    #                 total_pred[classes[label]] += 1
+        # test the model on the validation set
+        top1_acc_val, top5_acc_val, duration_val, confusion_matrix = validate_(
+            model=self.model, 
+            num_classes=self.num_classes,
+            dataloader=dataloader,
+            device=device)
+        
+        # save confusion matrix as a CSV file
+        pd.DataFrame(confusion_matrix.numpy()).to_csv('{0}/confusion_matrix.csv'.format(save_dir))
 
+        # log and send notifications
+        print(
+            "[test]: top1_acc = {0}, top5_acc = {1}"
+            .format( 
+                top1_acc_val,
+                top5_acc_val),
+            flush=True,
+            file=kwargs['log'][0])
+        print(
+            "[test]: time = {1}"
+            .format(duration_val),
+            flush=True,
+            file=kwargs['log'][0])
 
-    #     # print accuracy for each class
-    #     for classname, correct_count in correct_pred.items():
-    #         accuracy = 100 * float(correct_count) / total_pred[classname]
-    #         print(f'Accuracy for class: {classname:5s} is {accuracy:.1f} %')
+        # format a stats table (in newest to oldest order) and send it by email
+        os.system(
+            'header="\n %-5s %5s %5s\n";'
+            'format=" %-1.4f %1.4f %5.6f\n";'
+            'printf "$header" "TOP1" "TOP5" "TIME" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
+            'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
+            'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: $PBS_JOBNAME status update" maxim.yudayev@kuleuven.be'
+            .format(
+                ' '.join([
+                    ' '.join([str(e) for e in t]) for t 
+                    in zip(
+                        top1_acc_val,
+                        top5_acc_val,
+                        duration_val)]),
+                os.getenv('PBS_JOBID').split('.')[0]))
+        return

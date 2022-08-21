@@ -11,7 +11,7 @@
                 "train",
                 "--config",
                 "config/kinetics/config_original_local.json"
-            ]
+            ],
         },
         {
             "name": "Local Python: Proposed Scratch",
@@ -21,7 +21,21 @@
             "console": "integratedTerminal",
             "args": [
                 "train"
-            ]
+            ],
+        },
+        {
+            "name": "Local Python: Original Resume",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+                "train",
+                "--config",
+                "config/kinetics/config_original_local.json",
+                "--checkpoint",
+                "pretrained_models/kinetics/original/epoch-9.pt"
+            ],
         },
         {
             "name": "Local Python: Proposed Resume",
@@ -33,7 +47,7 @@
                 "train",
                 "--checkpoint",
                 "pretrained_models/kinetics/realtime/split_realtime_0/epoch-9.pt"
-            ]
+            ],
         },
         {
             "name": "VSC Python: Current File",

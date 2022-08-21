@@ -4,7 +4,7 @@
 #PBS -l partition=gpu
 #PBS -l pmem=5gb
 #PBS -l walltime=65:00:00
-#PBS -N st_gcn_train_orig_50_epochs
+#PBS -N st_gcn_train_rt_50_epochs
 #PBS -o debug/stdout.$PBS_JOBNAME.$PBS_JOBID
 #PBS -e debug/stderr.$PBS_JOBNAME.$PBS_JOBID
 #PBS -m bae
@@ -25,4 +25,4 @@ module load PyTorch/1.0.1-intel-2018a
 (>&2 echo 'starting computation')
 # Execute and time the script
 time python ../main.py train \
-    --config '/data/leuven/341/vsc34153/rt-st-gcn/config/kinetics/config_original_vsc.json'
+    --config '/data/leuven/341/vsc34153/rt-st-gcn/config/default_vsc.json'

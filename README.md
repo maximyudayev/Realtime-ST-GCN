@@ -10,7 +10,7 @@ Classes are decoupled for modularity and readability, with separation of concern
 - [x] Write a script to leverage [KU Leuven HPC](https://www.vscentrum.be/) infrastructure for the PyTorch workflow in a simple automated process that originates on the local machine.
 - [x] Add support for frame buffered realtime processing.
 - [x] Validate the code.
-- [ ] Train the models.
+- [x] Train the models.
 - [ ] Add support for 2 FIFO latency variants.
 - [ ] Quantize the model with the 8-bit dynamic fixed-point technique.
 - [ ] Compare correct adapted quantized and floating-point models against the original floating-point baseline.
@@ -24,24 +24,25 @@ Classes are decoupled for modularity and readability, with separation of concern
 ## Directory Tree
 ```
 root/
+├── .vscode/
+│   └── launch.json
 ├── README.md
 ├── ISSUE_TEMPLATE.md
 ├── LICENSE
 ├── .gitignore
 ├── main.py
 ├── processor.py
+├── st_gcn_parser.py
 ├── models/
 │   ├── proposed/
-│   │   ├── utils/
-│   │   │   ├── test_graph.py
-│   │   │   └── graph.py
 │   │   ├── st_gcn.py
 │   │   └── test_stg_gcn.py
-│   └── original/
-│       ├── utils/
-│       │   ├── graph.py
-│       │   └── tgcn.py
-│       └── st_gcn.py
+│   ├── original/
+│   │   └── st_gcn.py
+│   └── utils/
+│       ├── graph.py
+│       ├── test_graph.py
+│       └── tgcn.py
 ├── pretrained_models/
 ├── data/
 │   ├── kinetics/
@@ -55,6 +56,8 @@ root/
 │       └── ntu-rgb+d.json
 ├── config/
 │   ├── kinetics/
+│   │   ├── config_original_local.json
+│   │   ├── config_original_vsc.json
 │   │   └── config.json
 │   ├── ntu_rgb_d/
 │   │   └── config.json
@@ -65,6 +68,7 @@ root/
 │   └── label_eval.py
 ├── vsc/
 │   ├── st_gcn_gpu_debug.pbs
+│   ├── st_gcn_gpu_test_debug.pbs
 │   ├── st_gcn_gpu.pbs
 │   ├── st_gcn_gpu_bigmem.pbs
 │   └── vsc_cheatsheet.md
@@ -72,7 +76,10 @@ root/
     ├── get_models.sh
     └── get_data.sh
 ```
+### Data Structure
 Data and pretrained models directories are not tracked by the repository and must be downloaded from the source. Refer to the [Data section](#data).
+
+Datasets provide data as a 5D tensor in the format (N-batch, C-channels, L-length, V-nodes, M-skeletons), with labels as a 1D tensor (N-batch): meaning the datasets are limited to multiple skeletons in the scene either performing the same action or being involved in a mutual activity (salsa, boxing, etc.). In a real application, each skeleton in the scene may be independent from others requiring own prediction and label. Moreover, a skeleton may perform multiple different actions while in the always-on scene: action segmentation is done on a frame-by-frame basis, rather than on the entire video capture (training data guarantees only 1 qualifying action in each capture, but requires broadcasting of labels across time and skeletons for frame-by-frame model training, to be applicable to realtime always-on classifier).
 
 Kinetics dataset, 400 action classes, dimensions:
   Train - (240436, 3, 300, 18, 2).
@@ -86,8 +93,16 @@ NTU-RGB-D, 60 action classes, view dataset dimensions:
   Train - (37646, 3, 300, 25, 2)
   Validation - (18932, 3, 300, 25, 2)
 
+### Config Structure
+Config files configure the execution script, model architecture, optimizer settings, training state, etc. This provides separation of concern and clean abstraction from source code for the user to prototype the model on various use cases and configuration by simply editing or providing a new JSON file to the execution script.
+
 ## Installation
 ### Environment
+Local environment uses Conda for ease and convenience. 
+
+High Performance Computing for heavy-duty training and testing is done at Vlaams Supercomputer Centrum [(VSC)](https://www.vscentrum.be/), a Linux environment supercomputer for industry and academia in Flanders (Belgium).
+
+#### **Local**
 Create a Conda environment with all the dependencies, and clone the repository.
 ```shell
 conda create -n rt-st-gcn --file requirements.txt
@@ -95,12 +110,16 @@ conda activate rt-st-gcn
 git clone https://github.com/maximyudayev/Realtime-ST-GCN.git
 ```
 
+#### **Vlaams Supercomputer Centrum (VSC)**
+Build latest CUDA-enabled PyTorch with target processor toolchain or ignore this step and use scripts as-is to load VSC-provided prebuilt CUDA PyTorch 1.0.1.
+> **VSC PyTorch Build Repository** [[GitHub]](https://github.com/maximyudayev/VSC-PyTorch-Build)
+
 ### Data
 **Kinetics-skeleton** and **NTU RGB+D** data preprocessed by Yan et al. (2018) can be obtained for reproducible apples-to-apples benchmarking of the models. The datasets can be downloaded by running the script:
 ```shell
 ./tools/get_data.sh
 ```
-You can also download the datasets manually from their [Google Drive](https://drive.google.com/open?id=103NOL9YYZSW1hLoWmYnv5Fs8mK-Ij7qb) and extract them into ```./data```.
+You can also download the datasets manually from their [Google Drive](https://drive.google.com/open?id=103NOL9YYZSW1hLoWmYnv5Fs8mK-Ij7qb) and extract them into `./data` (local environment) or `$VSC_SCRATCH/rt_st_gcn/data` (VSC environment): high-bandwidth IO (access of the datasets) on VSC should be done from the Scratch partition (fast Infiniband interconnect), all else should be kept on the Data partition.
 
 Otherwise, for processing raw data by yourself, or to port new dataset to the model in the format it expects, please refer to the [original author's guide](https://github.com/yysijie/st-gcn/blob/master/OLD_README.md).
 
@@ -127,11 +146,11 @@ New datasets should match the data directory structure, provide configuration an
 ```
 
 ### Pretrained Model
-We provided the pretrained model weithts of our **ST-GCN** models. The model weights can be downloaded by running the script:
+We provided the pretrained model weights of our **ST-GCN** models. The model weights can be downloaded by running the script:
 ```shell
 ./tools/get_models.sh
 ```
-You can also download the models manually from [Google Drive](https://www.youtube.com/watch?v=BBJa32lCaaY) and put them into ```./pretrained_models```.
+You can also download the models manually from [Google Drive](https://www.youtube.com/watch?v=BBJa32lCaaY) and put them into `./pretrained_models` (local environment) or `$VSC_SCRATCH/rt_st_gcn/pretrained_models` (VSC environment), for the same reason as in the section above.
 
 <!-- 
 ## Testing Pretrained Models
@@ -189,13 +208,13 @@ python main.py recognition -c config/st_gcn/<dataset>/test.yaml --weights <path 
 
 1. **Proposed Batch ST-GCN**
    1. \#parameters: 806'074
-   2. \#MACs: 4.46 G
+   2. \#MACs: 4.46 G (per 300 frame capture)
 
 This checks out with manual counting:
 
 1. **Proposed Batch ST-GCN**
    1. \#parameters: 806'074
-   2. \#MACs: 14.65 M/sample -> 4.4 G (does not account for some extra multiplications with edge importance matrices and BN on residual branches of dimension-matching resnet blocks)
+   2. \#MACs: 14.65 M/frame -> 4.4 G (does not account for some extra multiplications with edge importance matrices and BN on residual branches of dimension-matching resnet blocks)
 
 ## Citation
 Please cite the following paper if you use this repository in your reseach.
@@ -213,6 +232,11 @@ For any questions, feel free to contact
 ```
 Maxim Yudayev : maxim.yudayev@kuleuven.be
 ```
+
+## Acknowledgements
+The resources and services used in this work were provided by the VSC [(Flemish Supercomputer Center)](https://www.vscentrum.be/), funded by the Research Foundation - Flanders (FWO) and the Flemish Government.
+
+The current ST-GCN architecture is heavily based on **Spatial Temporal Graph Convolutional Networks for Skeleton-Based Action Recognition**, Sijie Yan, Yuanjun Xiong and Dahua Lin, AAAI 2018. [[Arxiv Preprint]](https://arxiv.org/abs/1801.07455). The preprocessed Kinetics and NTU-RGB-D datasets as consistent `.npy` files are also provided by [Yan et. al's ST-GCN](https://github.com/yysijie/st-gcn). We thank the authors for publicly releasing their code and data.
 
 <!-- # Multi-Stage Spatial-Temporal Convolutional Neural Network (MS-GCN)
 This code implements the skeleton-based action segmentation MS-GCN model from [Automated freezing of gait assessment with
