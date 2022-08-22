@@ -27,7 +27,7 @@ def validate_(
         test_start_time = time.time()
 
         confusion_matrix = torch.zeros(num_classes, num_classes, device=device)
-        total_per_class = torch.zeros(1, num_classes, device=device)
+        total_per_class = torch.zeros(num_classes, 1, device=device)
 
         # sweep through the training dataset in minibatches
         for captures, labels in dataloader:
@@ -62,15 +62,16 @@ def validate_(
 
             # collect the correct predictions for each class and total per that class
             for batch_el in range(N*M):
-                top1_predicted_ohe = torch.zeros(L, num_classes)
+                top1_predicted_ohe = torch.zeros(L, num_classes, device=device)
                 top1_predicted_ohe[range(L), top1_predicted[batch_el]] = 1
                 confusion_matrix[labels[batch_el, 0]] += top1_predicted_ohe.sum(dim=0)
-                total_per_class[:,labels[batch_el, 0]] += L
+                total_per_class[labels[batch_el, 0]] += L
+            break
                 
         test_end_time = time.time()
 
         # normalize each row of the confusion matrix to obtain class probabilities
-        confusion_matrix = torch.div(confusion_matrix, total_per_class.T)
+        confusion_matrix = torch.div(confusion_matrix, total_per_class)
 
         top1_acc = top1_cor / total
         top5_acc = top5_cor / total
@@ -226,7 +227,7 @@ class Processor:
 
                 tot = labels.numel()
                 total += tot
-
+                break
             epoch_end_time = time.time()
             duration_train = epoch_end_time - epoch_start_time
             top1_acc_train = top1_correct / total
@@ -306,7 +307,7 @@ class Processor:
                             duration_train_list,
                             duration_val_list)]),
                     os.getenv('PBS_JOBID').split('.')[0]))
-
+            break
         # save the final model
         torch.save({
             "epoch": epoch,
