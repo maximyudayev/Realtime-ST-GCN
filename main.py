@@ -62,7 +62,20 @@ def common(args):
     for i, action in enumerate(actions):
         actions_dict[i] = action
 
-    return graph, actions_dict, device, train_dataloader, val_dataloader
+    # prepare a directory to store results
+    if not os.getenv('PBS_JOBID'):
+        with open('.vscode/pbs_jobid.txt', 'r+') as f:
+            job_id = f.readline()
+            os.environ['PBS_JOBID'] = job_id
+            f.seek(0)
+            f.write(str(int(job_id)+1))
+            f.truncate()
+    
+    save_dir = "{0}/{1}/run_{2}".format(args.out, args.model, os.getenv('PBS_JOBID').split('.')[0])
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    return graph, actions_dict, device, train_dataloader, val_dataloader, save_dir
 
 
 def build_model(args):
@@ -111,7 +124,7 @@ def train(args):
     """
 
     # perform common setup around the model's black box
-    args.graph, actions, device, train_dataloader, val_dataloader = common(args)
+    args.graph, actions, device, train_dataloader, val_dataloader, save_dir = common(args)
     args.num_classes = len(actions)
     
     # record the length of captures
@@ -134,19 +147,6 @@ def train(args):
 
     # last dimension is the number of subjects in the scene (2 for datasets used)
     print("Training started", flush=True, file=args.log[0])
-
-    # prepare a directory to store results
-    if not os.getenv('PBS_JOBID'):
-        with open('.vscode/pbs_jobid.txt', 'r+') as f:
-            job_id = f.readline()
-            os.environ['PBS_JOBID'] = job_id
-            f.seek(0)
-            f.write(str(int(job_id)+1))
-            f.truncate()
-    
-    save_dir = "{0}/{1}/run_{2}".format(args.out, args.model, os.getenv('PBS_JOBID').split('.')[0])
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
     
     # perform the training
     # (the model is trained on all skeletons in the scene, simultaneously)
@@ -160,9 +160,10 @@ def train(args):
     print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
     
     os.system(
-        'mail -s "[{0}]: $PBS_JOBNAME - COMPLETED" maxim.yudayev@kuleuven.be <<< ""'
+        'mail -s "[{0}]: $PBS_JOBNAME - COMPLETED" {1} <<< ""'
         .format(
-            os.getenv('PBS_JOBID').split('.')[0]))
+            os.getenv('PBS_JOBID').split('.')[0],
+            args.email))
 
     return
 
@@ -176,7 +177,7 @@ def test(args):
     """
 
     # perform common setup around the model's black box
-    args.graph, actions, device, _, val_dataloader = common(args)
+    args.graph, actions, device, _, val_dataloader, save_dir = common(args)
     args.num_classes = len(actions)
     
     # split between the subjects in the captures
@@ -199,19 +200,6 @@ def test(args):
 
     # last dimension is the number of subjects in the scene (2 for datasets used)
     print("Testing started", flush=True, file=args.log[0])
-
-    # prepare a directory to store results
-    if not os.getenv('PBS_JOBID'):
-        with open('.vscode/pbs_jobid.txt', 'r+') as f:
-            job_id = f.readline()
-            os.environ['PBS_JOBID'] = job_id
-            f.seek(0)
-            f.write(str(int(job_id)+1))
-            f.truncate()
-    
-    save_dir = "{0}/{1}/run_{2}".format(args.out, args.model, os.getenv('PBS_JOBID').split('.')[0])
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
     
     # perform the testing
     trainer.test(save_dir, val_dataloader, device, **vars(args))
@@ -219,8 +207,10 @@ def test(args):
     print("Testing completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
     
     os.system(
-        'mail -s "[{0}]: $PBS_JOBNAME - COMPLETED" maxim.yudayev@kuleuven.be <<< ""'
-        .format(os.getenv('PBS_JOBID').split('.')[0]))
+        'mail -s "[{0}]: $PBS_JOBNAME - COMPLETED" {1} <<< ""'
+        .format(
+            os.getenv('PBS_JOBID').split('.')[0], 
+            args.email))
 
     return
 
@@ -236,7 +226,7 @@ def benchmark(args):
     """
 
     # perform common setup around the model's black box
-    args.graph, actions, device, _, val_dataloader = common(args)
+    args.graph, actions, device, _, val_dataloader, save_dir = common(args)
     args.num_classes = len(actions)
     
     # split between the subjects in the captures
@@ -262,19 +252,6 @@ def benchmark(args):
 
     # last dimension is the number of subjects in the scene (2 for datasets used)
     print("Testing started", flush=True, file=args.log[0])
-
-    # prepare a directory to store results
-    if not os.getenv('PBS_JOBID'):
-        with open('.vscode/pbs_jobid.txt', 'r+') as f:
-            job_id = f.readline()
-            os.environ['PBS_JOBID'] = job_id
-            f.seek(0)
-            f.write(str(int(job_id)+1))
-            f.truncate()
-    
-    save_dir = "{0}/{1}/run_{2}".format(args.out, args.model, os.getenv('PBS_JOBID').split('.')[0])
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
     
     # perform the testing
     trainer.test(save_dir, val_dataloader, device, **vars(args))
@@ -282,9 +259,10 @@ def benchmark(args):
     print("Benchmarking completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
     
     os.system(
-        'mail -s "[{0}]: $PBS_JOBNAME - COMPLETED" maxim.yudayev@kuleuven.be <<< ""'
+        'mail -s "[{0}]: $PBS_JOBNAME - COMPLETED" {1} <<< ""'
         .format(
-            os.getenv('PBS_JOBID').split('.')[0]))
+            os.getenv('PBS_JOBID').split('.')[0],
+            args.email))
 
     return
 
@@ -332,6 +310,7 @@ if __name__ == '__main__':
             \r\t[--out OUT_DIR]
             \r\t[--checkpoint CHECKPOINT]
             \r\t[--log O_FILE E_FILE]
+            \r\t[--email EMAIL]
             \r\t[-v[vv]]""",
         help='train target ST-GCN network',
         epilog='TODO: add the epilog')
@@ -521,22 +500,209 @@ if __name__ == '__main__':
         help='files to log the script to. Only argument without default option in --config '
             '(default: stdout, stderr)')
     parser_train_io.add_argument(
+        '--email',
+        type=str,
+        metavar='',
+        default=None,
+        help='email address to send update notifications to (default: None)')
+    parser_train_io.add_argument(
+        '-v', '--verbose', dest='verbose',
+        action='count', 
+        default=0,
+        help='level of log detail (default: 0)')
+
+    # test command parser
+    parser_test = subparsers.add_parser(
+        'test',
+        usage="""%(prog)s\n\t[-h]
+            \r\t[--config FILE]            
+            \r\t[--model MODEL {realtime|buffer_realtime|batch|original}]
+            \r\t[--strategy STRATEGY {uniform|distance|spatial}]
+            \r\t[--in_feat IN_FEAT]
+            \r\t[--stages STAGES]
+            \r\t[--buffer BUFFER]
+            \r\t[--kernel [KERNEL]]
+            \r\t[--importance]
+            \r\t[--latency]
+            \r\t[--layers [LAYERS]]
+            \r\t[--in_ch [IN_CH,[...]]]
+            \r\t[--out_ch [OUT_CH,[...]]]
+            \r\t[--stride [STRIDE,[...]]]
+            \r\t[--residual [RESIDUAL,[...]]]
+            \r\t[--dropout [DROPOUT,[...]]]
+            \r\t[--graph FILE]
+
+            \r\t[--data DATA_DIR]
+            \r\t[--actions FILE]
+            \r\t[--out OUT_DIR]
+            \r\t[--checkpoint CHECKPOINT]
+            \r\t[--log O_FILE E_FILE]
+            \r\t[--email EMAIL]
+            \r\t[-v[vv]]""",
+        help='test target ST-GCN network',
+        epilog='TODO: add the epilog')
+
+    parser_test_model = parser_test.add_argument_group(
+        'model',
+        'arguments for configuring the ST-GCN model. '
+        'If an argument is not provided, defaults to value inside config file. '
+        'User can provide own config JSON file using --config argument, '
+        'but it is the user\'s responsibility to provide all needed parameters')
+    parser_test_io = parser_test.add_argument_group(
+        'IO',
+        'all miscallenous IO, log, file and path arguments')
+
+    # model arguments
+    parser_test_model.add_argument(
+        '--config',
+        type=str,
+        default='config/default_local.json',
+        metavar='',
+        help='path to the NN config file. Must be the last argument if combined '
+            'with other CLI arguments. Provides default values for all arguments, except --log '
+            '(default: config/default_local.json)')
+    parser_test_model.add_argument(
+        '--model',
+        choices=['realtime','buffer_realtime','batch','original'],
+        metavar='',
+        help='type of NN model to use (default: realtime)')
+    parser_test_model.add_argument(
+        '--strategy',
+        choices=['uniform','distance','spatial'],
+        metavar='',
+        help='type of graph partitioning strategy to use (default: spatial)')
+    parser_test_model.add_argument(
+        '--in_feat',
+        type=int,
+        metavar='',
+        help='number of features/channels in data samples (default: 3)')
+    parser_test_model.add_argument(
+        '--stages',
+        type=int,
+        metavar='',
+        help='number of ST-GCN stages to stack (default: 1)')
+    parser_test_model.add_argument(
+        '--buffer',
+        type=int,
+        metavar='',
+        help='number of frames to buffer before batch processing. '
+            'Applied only when --model=buffer_realtime (default: 1)')
+    parser_test_model.add_argument(
+        '--kernel',
+        type=int,
+        nargs='+',
+        metavar='',
+        help='list of temporal kernel sizes (Gamma) per stage (default: [9])')
+    parser_test_model.add_argument(
+        '--importance',
+        default=True,
+        action='store_true',
+        help='flag specifying whether ST-GCN layers have edge importance weighting '
+            '(default: True)')
+    parser_test_model.add_argument(
+        '--latency',
+        default=False,
+        action='store_true',
+        help='flag specifying whether ST-GCN layers have half-buffer latency '
+            '(default: False)')
+    parser_test_model.add_argument(
+        '--layers',
+        type=int,
+        nargs='+',
+        metavar='',
+        help='list of number of ST-GCN layers per stage (default: [9])')
+    parser_test_model.add_argument(
+        '--in_ch',
+        type=int,
+        nargs='+',
+        action='append',
+        metavar='',
+        help='list of number of input channels per ST-GCN layer per stage. '
+            'For multi-stage, pass --in_ch parameter multiple times '
+            '(default: [[64,64,64,64,128,128,128,256,256]])')
+    parser_test_model.add_argument(
+        '--out_ch',
+        type=int, 
+        nargs='+',
+        action='append',
+        metavar='',
+        help='list of number of output channels per ST-GCN layer per stage. '
+            'For multi-stage, pass --out_ch parameter multiple times '
+            '(default: [[64,64,64,128,128,128,256,256,256]])')
+    parser_test_model.add_argument(
+        '--stride',
+        type=int, 
+        nargs='+',
+        action='append',
+        metavar='',
+        help='list of size of stride in temporal accumulation per ST-GCN layer per stage. '
+            'For multi-stage, pass --stride parameter multiple times '
+            '(default: [[1,1,1,2,1,1,2,1,1]])')
+    parser_test_model.add_argument(
+        '--residual',
+        type=int, 
+        nargs='+',
+        action='append',
+        metavar='',
+        help='list of binary flags specifying residual connection per ST-GCN layer per stage. '
+            'For multi-stage, pass --residual parameter multiple times '
+            '(default: [[0,1,1,1,1,1,1,1,1]])')
+    parser_test_model.add_argument(
+        '--dropout',
+        type=float,
+        nargs='+',
+        action='append',
+        metavar='',
+        help='list of dropout values per ST-GCN layer per stage. '
+            'For multi-stage, pass --dropout parameter multiple times '
+            '(default: [[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]])')
+    parser_test_model.add_argument(
+        '--graph',
+        type=str,
+        metavar='',
+        help='path to the skeleton graph specification file '
+            '(default: data/skeletons/openpose.json)')
+    # IO arguments
+    parser_test_io.add_argument(
+        '--data',
+        metavar='',
+        help='path to the dataset directory (default: data/kinetics)')
+    parser_test_io.add_argument(
+        '--actions',
+        metavar='',
+        help='path to the action classes file (default: data/kinetics/actions.txt)')
+    parser_test_io.add_argument(
+        '--out',
+        metavar='',
+        help='path to the output directory (default: pretrained_models/kinetics)')
+    parser_test_io.add_argument(
+        '--checkpoint',
+        type=str,
+        metavar='',
+        default=None,
+        help='path to the checkpoint to restore states from (default: None)')
+    parser_test_io.add_argument(
+        '--log',
+        nargs=2,
+        type=argparse.FileType('w'),
+        # const=[t1+t2+'.txt' for t1, t2 in zip(['log.o.','log.e.'],2*[str(time.time())])],
+        default=[sys.stdout, sys.stderr],
+        metavar='',
+        help='files to log the script to. Only argument without default option in --config '
+            '(default: stdout, stderr)')
+    parser_test_io.add_argument(
+        '--email',
+        type=str,
+        metavar='',
+        default=None,
+        help='email address to send update notifications to (default: None)')
+    parser_test_io.add_argument(
         '-v', '--verbose', dest='verbose',
         action='count', 
         default=0,
         help='level of log detail (default: 0)')
 
     ##################################################################
-    # test command parser
-    # TODO: setup all the needed CLI arguments
-    parser_test = subparsers.add_parser(
-        'test',
-        usage="""%(prog)s\n\t[-h]
-            
-            """,
-        help='test target ST-GCN network',
-        epilog='TODO: add the epilog')
-
     # benchmark command parser
     # TODO: setup all the needed CLI arguments
     parser_benchmark = subparsers.add_parser(

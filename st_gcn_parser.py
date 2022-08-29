@@ -44,9 +44,9 @@ class Parser(argparse.ArgumentParser):
         # by user as CLI arguments
         with open(cli_args.config, 'r') as f:
             data = json.load(f)
-
+        
         # parse arguments in the file and store them in a blank namespace
-        config_args = dict(**data['model'], **data['optimizer'])
+        config_args = dict([items for sub_dict in data.items() for items in sub_dict[1].items()])
 
         # set arguments in the target namespace if they haven’t been set yet
         for k, v in config_args.items():

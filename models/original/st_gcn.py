@@ -69,18 +69,30 @@ class Model(nn.Module):
 
 
     def forward(self, x):
+        # # data normalization
+        # N, C, T, V, M = x.size()
+        # # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
+        # # this incures extra overhead
+        # x = x.permute(0, 4, 3, 1, 2).contiguous()
+        # # (N,M,V,C,T)
+        # x = x.view(N * M, V * C, T)
+        # x = self.data_bn(x)
+        # x = x.view(N, M, V, C, T)
+        # x = x.permute(0, 1, 3, 4, 2).contiguous()
+        # x = x.view(N * M, C, T, V)
+        # # (N',C,T,V)
+
         # data normalization
-        N, C, T, V, M = x.size()
+        N, C, T, V = x.size()
         # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
         # this incures extra overhead
-        x = x.permute(0, 4, 3, 1, 2).contiguous()
-        # (N,M,V,C,T)
-        x = x.view(N * M, V * C, T)
+        x = x.permute(0, 3, 1, 2).contiguous()
+        # (N,V,C,T)
+        x = x.view(N, V * C, T)
         x = self.data_bn(x)
-        x = x.view(N, M, V, C, T)
-        x = x.permute(0, 1, 3, 4, 2).contiguous()
-        x = x.view(N * M, C, T, V)
-        # (N',C,T,V)
+        x = x.view(N, V, C, T)
+        x = x.permute(0, 2, 3, 1)
+        # (N,C,T,V)
 
         # remap the features to the network size
         x = self.fcn_in(x)

@@ -34,13 +34,14 @@ def validate_(
             N, _, L, _, M = captures.size()
             # move both data to the compute device
             # (captures is a batch of full-length captures, label is a batch of ground truths)
-            captures = captures.to(device)
+            captures = captures[:,:,:,:,0].to(device)
             # broadcast the labels across the capture length dimension for framewise comparison to predictions
             # expanding labels tensor does not allocate new memory, only creates a new view on existing tensor
             labels = labels.to(device)
-            labels = labels[:,None,None].expand(-1,L,M)
-            labels = labels.permute(0,2,1).contiguous().view(N*M,L)
-            
+            # labels = labels[:,None,None].expand(-1,L,M)
+            # labels = labels.permute(0,2,1).contiguous().view(N*M,L)
+            labels = labels[:,None].expand(-1,L)
+
             # make predictions and compute the loss
             # forward pass the minibatch through the model for the corresponding subject
             # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
@@ -61,13 +62,13 @@ def validate_(
             total += tot
 
             # collect the correct predictions for each class and total per that class
-            for batch_el in range(N*M):
+            # for batch_el in range(N*M):
+            for batch_el in range(N):
                 top1_predicted_ohe = torch.zeros(L, num_classes, device=device)
                 top1_predicted_ohe[range(L), top1_predicted[batch_el]] = 1
                 confusion_matrix[labels[batch_el, 0]] += top1_predicted_ohe.sum(dim=0)
                 total_per_class[labels[batch_el, 0]] += L
-            break
-                
+
         test_end_time = time.time()
 
         # normalize each row of the confusion matrix to obtain class probabilities
@@ -166,7 +167,7 @@ class Processor:
         # train the model for num_epochs
         # (dataloader is automatically shuffled after each epoch)
         for epoch in range_epochs:
-            if (epoch == 50): break
+            if (epoch == 20): break
 
             # set layers to training mode if behavior of any differs between train and prediction
             # (prepares Dropout and BatchNormalization layers to disable and to learn parameters, respectively)
@@ -188,12 +189,13 @@ class Processor:
                 N, _, L, _, M = captures.size()
                 # move both data to the compute device
                 # (captures is a batch of full-length captures, label is a batch of ground truths)
-                captures = captures.to(device)
+                captures = captures[:,:,:,:,0].to(device)
                 # broadcast the labels across the capture length dimension for framewise comparison to predictions
                 # expanding labels tensor does not allocate new memory, only creates a new view on existing tensor
                 labels = labels.to(device)
-                labels = labels[:,None,None].expand(-1,L,M)
-                labels = labels.permute(0,2,1).contiguous().view(N*M,L)
+                labels = labels[:,None].expand(-1,L)
+                # labels = labels[:,None,None].expand(-1,L,M)
+                # labels = labels.permute(0,2,1).contiguous().view(N*M,L)
                 
                 # zero the gradient buffers
                 self.optimizer.zero_grad()
@@ -216,7 +218,7 @@ class Processor:
                 self.optimizer.step()
 
                 # calculate the predictions statistics
-                # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
+                # this only sums the number of top-1/5 correctly predicted frames, but doesn't look at prediction jitter
                 _, top5_predicted = torch.topk(predictions, k=5, dim=1)
                 top1_predicted = top5_predicted[:,0,:]
 
@@ -227,7 +229,7 @@ class Processor:
 
                 tot = labels.numel()
                 total += tot
-                break
+
             epoch_end_time = time.time()
             duration_train = epoch_end_time - epoch_start_time
             top1_acc_train = top1_correct / total
@@ -245,6 +247,11 @@ class Processor:
             # set layers to inference mode if behavior differs between train and prediction
             # (prepares Dropout and BatchNormalization layers to enable and to freeze parameters, respectively)
             self.model.eval()
+            
+            # sets all layers into evaluation mode except the dropout layers
+            for layer in self.model.modules():
+                if isinstance(layer, nn.Dropout):
+                    layer.train()
 
             # test the model on the validation set
             top1_acc_val, top5_acc_val, duration_val, confusion_matrix = validate_(
@@ -254,7 +261,7 @@ class Processor:
                 device=device)
 
             # save confusion matrix as a CSV file
-            pd.DataFrame(confusion_matrix.numpy()).to_csv('{0}/confusion_matrix_epoch-{1}.csv'.format(save_dir, epoch))
+            pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion_matrix_epoch-{1}.csv'.format(save_dir, epoch))
 
             # log and send notifications
             print(
@@ -293,7 +300,7 @@ class Processor:
                 'format=" %-03d %4.6f %1.4f %1.4f %1.4f %1.4f %5.6f %5.6f\n";'
                 'printf "$header" "EPOCH" "LOSS" "TOP1_TRAIN" "TOP5_TRAIN" "TOP1_VAL" "TOP5_VAL" "TIME_TRAIN" "TIME_VAL" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
                 'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
-                'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: $PBS_JOBNAME status update" maxim.yudayev@kuleuven.be'
+                'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: $PBS_JOBNAME status update" {2}'
                 .format(
                     ' '.join([
                         ' '.join([str(e) for e in t]) for t 
@@ -306,8 +313,18 @@ class Processor:
                             top5_acc_val_list,
                             duration_train_list,
                             duration_val_list)]),
-                    os.getenv('PBS_JOBID').split('.')[0]))
-            break
+                    os.getenv('PBS_JOBID').split('.')[0],
+                    kwargs['email']))
+
+            # save (update) train-validation curve as a CSV file after each epoch
+            pd.DataFrame(
+                data={
+                    'top1_train': top1_acc_train_list,
+                    'top1_val': top1_acc_val_list,
+                    'top5_train': top5_acc_train_list,
+                    'top5_val': top5_acc_val_list
+                }).to_csv('{0}/train-validation-curve.csv'.format(save_dir))
+
         # save the final model
         torch.save({
             "epoch": epoch,
@@ -316,15 +333,6 @@ class Processor:
             "loss": epoch_loss,
             }, "{0}/final.pt".format(save_dir))
 
-        # save train-validation curve as a CSV file
-        pd.DataFrame(
-            index=[0],
-            data={
-                'top1_train': top1_acc_train,
-                'top1_val': top1_acc_val,
-                'top5_train': top5_acc_train,
-                'top5_val': top5_acc_val
-            }).to_csv('{0}/train-validation-curve.csv'.format(save_dir))
         return
 
 
@@ -355,7 +363,7 @@ class Processor:
             device=device)
         
         # save confusion matrix as a CSV file
-        pd.DataFrame(confusion_matrix.numpy()).to_csv('{0}/confusion_matrix.csv'.format(save_dir))
+        pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion_matrix.csv'.format(save_dir))
 
         # log and send notifications
         print(
@@ -377,7 +385,7 @@ class Processor:
             'format=" %-1.4f %1.4f %5.6f\n";'
             'printf "$header" "TOP1" "TOP5" "TIME" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
             'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
-            'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: $PBS_JOBNAME status update" maxim.yudayev@kuleuven.be'
+            'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: $PBS_JOBNAME status update" {2}'
             .format(
                 ' '.join([
                     ' '.join([str(e) for e in t]) for t 
@@ -385,5 +393,6 @@ class Processor:
                         top1_acc_val,
                         top5_acc_val,
                         duration_val)]),
-                os.getenv('PBS_JOBID').split('.')[0]))
+                os.getenv('PBS_JOBID').split('.')[0],
+                kwargs['email']))
         return

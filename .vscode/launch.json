@@ -5,7 +5,7 @@
             "name": "Local Python: Original Scratch",
             "type": "python",
             "request": "launch",
-            "program": "${file}",
+            "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
                 "train",
@@ -17,7 +17,7 @@
             "name": "Local Python: Proposed Scratch",
             "type": "python",
             "request": "launch",
-            "program": "${file}",
+            "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
                 "train"
@@ -27,7 +27,7 @@
             "name": "Local Python: Original Resume",
             "type": "python",
             "request": "launch",
-            "program": "${file}",
+            "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
                 "train",
@@ -41,7 +41,7 @@
             "name": "Local Python: Proposed Resume",
             "type": "python",
             "request": "launch",
-            "program": "${file}",
+            "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
                 "train",

@@ -9,7 +9,7 @@
         "in_feat": 3,
         "stages": 1,
         "layers": [9],
-        "kernel": [9],
+        "kernel": [69],
         "latency": false,
         "importance": true,
         "in_ch": [
@@ -45,5 +45,8 @@
         "learning_rate": 0.01,
         "learning_rate_decay": 0.1,
         "batch_size": 64
+    },
+    "job": {
+        "email": "maxim.yudayev@kuleuven.be"
     }
 }

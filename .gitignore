@@ -15,4 +15,4 @@ pretrained_models/
 *.prof
 
 # named files anywhere
-mail_draft.txt
+mail_draft*.txt
