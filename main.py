@@ -332,11 +332,11 @@ if __name__ == '__main__':
     parser_train_model.add_argument(
         '--config',
         type=str,
-        default='config/default_local.json',
+        default='config/kinetics/realtime_local.json',
         metavar='',
         help='path to the NN config file. Must be the last argument if combined '
             'with other CLI arguments. Provides default values for all arguments, except --log '
-            '(default: config/default_local.json)')
+            '(default: config/kinetics/realtime_local.json)')
     parser_train_model.add_argument(
         '--model',
         choices=['realtime','buffer_realtime','batch','original'],
@@ -556,11 +556,11 @@ if __name__ == '__main__':
     parser_test_model.add_argument(
         '--config',
         type=str,
-        default='config/default_local.json',
+        default='config/kinetics/realtime_local.json',
         metavar='',
         help='path to the NN config file. Must be the last argument if combined '
             'with other CLI arguments. Provides default values for all arguments, except --log '
-            '(default: config/default_local.json)')
+            '(default: config/kinetics/realtime_local.json)')
     parser_test_model.add_argument(
         '--model',
         choices=['realtime','buffer_realtime','batch','original'],

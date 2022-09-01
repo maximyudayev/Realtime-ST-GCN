@@ -9,7 +9,7 @@
         "in_feat": 3,
         "stages": 1,
         "layers": [9],
-        "kernel": [69],
+        "kernel": [9],
         "latency": false,
         "importance": true,
         "in_ch": [

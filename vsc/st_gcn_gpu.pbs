@@ -24,5 +24,4 @@ module load PyTorch/1.0.1-intel-2018a
 
 (>&2 echo 'starting computation')
 # Execute and time the script
-time python ../main.py train \
-    --config '/data/leuven/341/vsc34153/rt-st-gcn/config/kinetics/config_original_vsc.json'
+time python ../main.py train --config '/data/leuven/341/vsc34153/rt-st-gcn/config/kinetics/realtime_vsc.json'

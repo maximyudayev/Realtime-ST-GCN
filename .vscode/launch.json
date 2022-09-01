@@ -10,7 +10,7 @@
             "args": [
                 "train",
                 "--config",
-                "config/kinetics/config_original_local.json"
+                "config/kinetics/original_local.json"
             ],
         },
         {
@@ -32,7 +32,7 @@
             "args": [
                 "train",
                 "--config",
-                "config/kinetics/config_original_local.json",
+                "config/kinetics/original_local.json",
                 "--checkpoint",
                 "pretrained_models/kinetics/original/epoch-9.pt"
             ],
@@ -58,7 +58,7 @@
             "args": [
                 "train",
                 "--config",
-                "/data/leuven/341/vsc34153/rt-st-gcn/config/default_vsc.json",
+                "/data/leuven/341/vsc34153/rt-st-gcn/config/kinetics/realtime_vsc.json",
                 "--checkpoint",
                 "/scratch/leuven/341/vsc34153/rt_st_gcn/pretrained_models/kinetics/realtime/split_realtime_0/epoch-9.pt"
             ]

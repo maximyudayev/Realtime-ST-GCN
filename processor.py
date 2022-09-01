@@ -167,8 +167,6 @@ class Processor:
         # train the model for num_epochs
         # (dataloader is automatically shuffled after each epoch)
         for epoch in range_epochs:
-            if (epoch == 20): break
-
             # set layers to training mode if behavior of any differs between train and prediction
             # (prepares Dropout and BatchNormalization layers to disable and to learn parameters, respectively)
             self.model.train()
