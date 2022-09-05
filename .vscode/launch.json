@@ -20,7 +20,11 @@
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
-                "train"
+                "train",
+                "--kernel",
+                "153",
+                "--epochs",
+                "40"
             ],
         },
         {

@@ -488,13 +488,12 @@ class StgcnLayer(nn.Module):
         self.out_channels = out_channels
        
         # lower triangle matrix for temporal accumulation that mimics FIFO behavior
-        lt_matrix = torch.zeros(capture_length, capture_length) 
-        for i in range(kernel_size): 
-            lt_matrix += F.pad( 
-                torch.eye( 
-                    capture_length - stride * i),  
-                (0,i*stride,i*stride,0)) 
-        lt_matrix = torch.transpose(lt_matrix,0,1) 
+        lt_matrix = torch.zeros(capture_length, capture_length)
+        for i in range(kernel_size//stride):
+            lt_matrix += F.pad(
+                torch.eye(
+                    capture_length - stride * i),
+                (i*stride,0,0,i*stride))
         # must register matrix as a buffer to automatically move to GPU with model.to_device()
         # for PyTorch v1.0.1
         self.register_buffer('lt_matrix', lt_matrix) 
