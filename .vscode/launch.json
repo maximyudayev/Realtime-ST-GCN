@@ -21,10 +21,20 @@
             "console": "integratedTerminal",
             "args": [
                 "train",
-                "--kernel",
-                "153",
-                "--epochs",
-                "40"
+                "--config",
+                "config/pku-mmd/realtime_local.json"
+            ],
+        },
+        {
+            "name": "Local Python: Proposed Test",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "test",
+                "--checkpoint",
+                "pretrained_models/kinetics/realtime/run_51240758_rt_69_20/epoch-19.pt"
             ],
         },
         {

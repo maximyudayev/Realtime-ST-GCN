@@ -18,6 +18,11 @@ def validate_(
     test invokes it once for inference only.
     """
 
+    # # sets all layers into evaluation mode except the dropout layers
+    # for layer in model.modules():
+    #     if isinstance(layer, nn.Dropout):
+    #         layer.train()
+
     # do not record gradients
     with torch.no_grad():    
         top1_correct = 0
@@ -31,16 +36,10 @@ def validate_(
 
         # sweep through the training dataset in minibatches
         for captures, labels in dataloader:
-            N, _, L, _, M = captures.size()
+            N, _, L, _ = captures.size()
             # move both data to the compute device
             # (captures is a batch of full-length captures, label is a batch of ground truths)
-            captures = captures[:,:,:,:,0].to(device)
-            # broadcast the labels across the capture length dimension for framewise comparison to predictions
-            # expanding labels tensor does not allocate new memory, only creates a new view on existing tensor
-            labels = labels.to(device)
-            # labels = labels[:,None,None].expand(-1,L,M)
-            # labels = labels.permute(0,2,1).contiguous().view(N*M,L)
-            labels = labels[:,None].expand(-1,L)
+            captures, labels = captures.to(device), labels.to(device)
 
             # make predictions and compute the loss
             # forward pass the minibatch through the model for the corresponding subject
@@ -184,16 +183,10 @@ class Processor:
 
             # sweep through the training dataset in minibatches
             for captures, labels in train_dataloader:
-                N, _, L, _, M = captures.size()
+                N, _, L, _ = captures.size()
                 # move both data to the compute device
                 # (captures is a batch of full-length captures, label is a batch of ground truths)
-                captures = captures[:,:,:,:,0].to(device)
-                # broadcast the labels across the capture length dimension for framewise comparison to predictions
-                # expanding labels tensor does not allocate new memory, only creates a new view on existing tensor
-                labels = labels.to(device)
-                labels = labels[:,None].expand(-1,L)
-                # labels = labels[:,None,None].expand(-1,L,M)
-                # labels = labels.permute(0,2,1).contiguous().view(N*M,L)
+                captures, labels = captures.to(device), labels.to(device)
                 
                 # zero the gradient buffers
                 self.optimizer.zero_grad()
@@ -245,11 +238,6 @@ class Processor:
             # set layers to inference mode if behavior differs between train and prediction
             # (prepares Dropout and BatchNormalization layers to enable and to freeze parameters, respectively)
             self.model.eval()
-            
-            # sets all layers into evaluation mode except the dropout layers
-            for layer in self.model.modules():
-                if isinstance(layer, nn.Dropout):
-                    layer.train()
 
             # test the model on the validation set
             top1_acc_val, top5_acc_val, duration_val, confusion_matrix = validate_(

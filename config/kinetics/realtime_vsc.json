@@ -3,6 +3,7 @@
         "model": "realtime",
         "strategy": "spatial",
         "data": "/scratch/leuven/341/vsc34153/rt_st_gcn/data/kinetics",
+        "dataset_type": "file",
         "out": "/scratch/leuven/341/vsc34153/rt_st_gcn/pretrained_models/kinetics",
         "actions": "/scratch/leuven/341/vsc34153/rt_st_gcn/data/kinetics/actions.txt",
         "graph": "/scratch/leuven/341/vsc34153/rt_st_gcn/data/skeletons/openpose.json",

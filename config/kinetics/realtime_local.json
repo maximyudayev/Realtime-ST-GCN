@@ -3,6 +3,7 @@
         "model": "realtime",
         "strategy": "spatial",
         "data": "data/kinetics",
+        "dataset_type": "file",
         "out": "pretrained_models/kinetics",
         "actions": "data/kinetics/actions.txt",
         "graph": "data/skeletons/openpose.json",
@@ -26,7 +27,7 @@
             [0,1,1,1,1,1,1,1,1]
         ],
         "dropout": [
-            [0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]
+            [0,0,0,0,0,0,0,0,0]
         ]
     },
     "optimizer": {

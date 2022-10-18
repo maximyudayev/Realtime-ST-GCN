@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
-from data_prep.dataset import SkeletonDataset
+from data_prep.dataset import SkeletonDataset, SkeletonDatasetFromDirectory
 from models.proposed.st_gcn import Stgcn
 from models.original.st_gcn import Model as OriginalStgcn
 from processor import Processor
@@ -44,23 +44,28 @@ def common(args):
     torch.backends.cudnn.deterministic = True
 
     # preparing datasets for training and validation
-    train_data = SkeletonDataset('{0}/train_data.npy'.format(args.data), '{0}/train_label.pkl'.format(args.data))
-    val_data = SkeletonDataset('{0}/val_data.npy'.format(args.data), '{0}/val_label.pkl'.format(args.data))
+    if args.dataset_type == 'file':
+        train_data = SkeletonDataset('{0}/train_data.npy'.format(args.data), '{0}/train_label.pkl'.format(args.data))
+        val_data = SkeletonDataset('{0}/val_data.npy'.format(args.data), '{0}/val_label.pkl'.format(args.data))
+    elif args.dataset_type == 'dir':
+        train_data = SkeletonDatasetFromDirectory('{0}/train/features'.format(args.data), '{0}/train/labels'.format(args.data))
+        val_data = SkeletonDatasetFromDirectory('{0}/val/features'.format(args.data), '{0}/val/labels'.format(args.data))
 
     train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
     val_dataloader = DataLoader(val_data, batch_size=args.batch_size, shuffle=True)
-
-    # extract actions from the label file
-    with open(args.actions, 'r') as action_names:
-        actions = action_names.read().split('\n')
     
     # extract skeleton graph data
     with open(args.graph, 'r') as graph_file:
         graph = json.load(graph_file)
 
-    actions_dict = dict()
+    # extract actions from the label file
+    with open(args.actions, 'r') as action_names:
+        actions = action_names.read().split('\n')
+
+    # 0th class is always background action
+    actions_dict = {0: "background"}
     for i, action in enumerate(actions):
-        actions_dict[i] = action
+        actions_dict[i+1] = action
 
     # prepare a directory to store results
     if not os.getenv('PBS_JOBID'):
@@ -129,7 +134,6 @@ def train(args):
     
     # record the length of captures
     data, _ = next(iter(train_dataloader))
-    args.capture_length = data.shape[2]
 
     # construct the target model using the CLI arguments
     model = build_model(args)
@@ -306,6 +310,7 @@ if __name__ == '__main__':
             \r\t[--batch_size BATCH]
 
             \r\t[--data DATA_DIR]
+            \r\t[--dataset_type TYPE]
             \r\t[--actions FILE]
             \r\t[--out OUT_DIR]
             \r\t[--checkpoint CHECKPOINT]
@@ -477,6 +482,10 @@ if __name__ == '__main__':
         metavar='',
         help='path to the dataset directory (default: data/kinetics)')
     parser_train_io.add_argument(
+        '--dataset_type',
+        metavar='',
+        help='type of the dataset (default: file)')
+    parser_train_io.add_argument(
         '--actions',
         metavar='',
         help='path to the action classes file (default: data/kinetics/actions.txt)')
@@ -533,6 +542,7 @@ if __name__ == '__main__':
             \r\t[--graph FILE]
 
             \r\t[--data DATA_DIR]
+            \r\t[--dataset_type TYPE]
             \r\t[--actions FILE]
             \r\t[--out OUT_DIR]
             \r\t[--checkpoint CHECKPOINT]
@@ -667,6 +677,10 @@ if __name__ == '__main__':
         '--data',
         metavar='',
         help='path to the dataset directory (default: data/kinetics)')
+    parser_test_io.add_argument(
+        '--dataset_type',
+        metavar='',
+        help='type of the dataset (default: file)')
     parser_test_io.add_argument(
         '--actions',
         metavar='',

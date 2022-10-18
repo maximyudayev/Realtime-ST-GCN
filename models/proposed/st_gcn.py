@@ -36,19 +36,6 @@ class Stgcn(nn.Module):
 
     def __init__(
         self,
-        # in_feat: int,
-        # num_classes: int,
-        # kernel: list[int],
-        # importance: bool,
-        # latency: bool,
-        # layers: list[int],
-        # in_ch: list[list[int]],
-        # out_ch: list[list[int]],
-        # stride: list[list[int]],
-        # residual: list[list[int]],
-        # dropout: list[list[float]],
-        # graph: dict,
-        # strategy: str,
         **kwargs) -> None:
         """
         Kwargs:
@@ -136,8 +123,7 @@ class Stgcn(nn.Module):
                     stride=kwargs['stride'][i][j],
                     num_partitions=self.A.shape[0],
                     residual=not not kwargs['residual'][i][j],
-                    dropout=kwargs['dropout'][i][j],
-                    capture_length=kwargs['capture_length'])
+                    dropout=kwargs['dropout'][i][j])
                 for j in range(layers_in_stage)] 
                 for i, layers_in_stage in enumerate(kwargs['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
@@ -445,8 +431,7 @@ class StgcnLayer(nn.Module):
         stride,
         num_partitions,
         dropout,
-        residual,
-        capture_length):
+        residual):
         """
         Args:
             in_channels : ``int``
@@ -484,19 +469,9 @@ class StgcnLayer(nn.Module):
         self.num_partitions = num_partitions
         self.num_joints = num_joints
         self.stride = stride
+        self.kernel_size = kernel_size
 
         self.out_channels = out_channels
-       
-        # lower triangle matrix for temporal accumulation that mimics FIFO behavior
-        lt_matrix = torch.zeros(capture_length, capture_length)
-        for i in range(kernel_size//stride):
-            lt_matrix += F.pad(
-                torch.eye(
-                    capture_length - stride * i),
-                (i*stride,0,0,i*stride))
-        # must register matrix as a buffer to automatically move to GPU with model.to_device()
-        # for PyTorch v1.0.1
-        self.register_buffer('lt_matrix', lt_matrix) 
 
         # convolution of incoming frame 
         # (out_channels is a multiple of the partition number
@@ -530,6 +505,18 @@ class StgcnLayer(nn.Module):
 
 
     def forward(self, x, A):
+        # lower triangle matrix for temporal accumulation that mimics FIFO behavior
+        capture_length = x.size(2)
+        lt_matrix = torch.zeros(capture_length, capture_length, )
+        for i in range(self.kernel_size//self.stride):
+            lt_matrix += F.pad(
+                torch.eye(
+                    capture_length - self.stride * i),
+                (i*self.stride,0,0,i*self.stride))
+        # # must register matrix as a buffer to automatically move to GPU with model.to_device()
+        # # for PyTorch v1.0.1
+        # self.register_buffer('lt_matrix', lt_matrix)
+
         # residual branch 
         res = self.residual(x) 
          
@@ -552,7 +539,7 @@ class StgcnLayer(nn.Module):
         # sum temporally by multiplying features with the Toeplitz matrix 
         # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L) 
         x = x.permute(0,2,3,4,1) 
-        x = torch.matmul(x, self.lt_matrix) 
+        x = torch.matmul(x, lt_matrix) 
         # sum across partitions (N,C,V,L) 
         x = torch.sum(x, dim=(1)) 
         # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V) 
