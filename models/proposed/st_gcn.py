@@ -513,8 +513,8 @@ class StgcnLayer(nn.Module):
                 torch.eye(
                     capture_length - self.stride * i),
                 (i*self.stride,0,0,i*self.stride))
-        # # must register matrix as a buffer to automatically move to GPU with model.to_device()
-        # # for PyTorch v1.0.1
+        # must register matrix as a buffer to automatically move to GPU with model.to_device()
+        # for PyTorch v1.0.1
         # self.register_buffer('lt_matrix', lt_matrix)
 
         # residual branch 
