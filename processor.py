@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import optim
 import pandas as pd
 import time
@@ -106,6 +107,7 @@ class Processor:
 
         self.model = model
         self.ce = nn.CrossEntropyLoss(ignore_index=-100, reduction='mean')
+        self.mse = nn.MSELoss(reduction='mean')
         self.num_classes = num_classes
 
 
@@ -199,7 +201,18 @@ class Processor:
 
                 # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
                 # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
+                # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
+                # CE guides model toward absolute correctness on single frame predictions,
+                # MSE component punishes large variations in class probabilities between consecutive samples
                 loss = self.ce(predictions, labels)
+                loss += 0.15 * torch.mean(
+                    torch.clamp(
+                        self.mse(
+                            F.log_softmax(predictions[:,:,1:], dim=1), 
+                            F.log_softmax(predictions.detach()[:,:,:-1], dim=1)),
+                        min=0,
+                        max=16))
+
                 epoch_loss += loss.data.item()
                 
                 # backward pass to compute the gradients
