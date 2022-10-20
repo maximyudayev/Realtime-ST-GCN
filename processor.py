@@ -74,8 +74,8 @@ def validate_(
         # normalize each row of the confusion matrix to obtain class probabilities
         confusion_matrix = torch.div(confusion_matrix, total_per_class)
 
-        top1_acc = top1_cor / total
-        top5_acc = top5_cor / total
+        top1_acc = top1_correct / total
+        top5_acc = top5_correct / total
         duration = test_end_time - test_start_time
 
     return top1_acc, top5_acc, duration, confusion_matrix

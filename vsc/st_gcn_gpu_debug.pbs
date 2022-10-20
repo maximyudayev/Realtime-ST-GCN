@@ -1,17 +1,15 @@
 #!/bin/bash
 #PBS -A lp_stadius_fpga_ai
-#PBS -l nodes=1:ppn=36:gpus=4:skylake
+#PBS -l nodes=1:ppn=9:gpus=1:skylake
 #PBS -l partition=gpu
 #PBS -l pmem=5gb
 #PBS -l qos=debugging
-#PBS -l walltime=10:00
-#PBS -N st_gcn_debug
 #PBS -o debug/stdout.$PBS_JOBNAME.$PBS_JOBID
 #PBS -e debug/stderr.$PBS_JOBNAME.$PBS_JOBID
 #PBS -m bae
 #PBS -M maxim.yudayev@kuleuven.be
 
-# (1/1) Debug Skylake 4x P100 GPU node (requires 9 cores per gpu)
+# (1/1) Debug Skylake 1x P100 GPU node (requires 9 cores per gpu)
 # GPU partition
 # Debug Skylake GPU node has thin node's memory (192GB)
 # Debug specifier
@@ -25,6 +23,7 @@ module purge
 # Load VSC optimized PyTorch with CUDA
 module load PyTorch/1.0.1-intel-2018a
 
-(>&2 echo 'starting computation')
+(>&1 echo "$@")
+(>&1 echo 'starting computation')
 # Execute and time the script
-time python ../main.py train --config '/data/leuven/341/vsc34153/rt-st-gcn/config/kinetics/realtime_vsc.json'
+time python ../main.py train "$@"
