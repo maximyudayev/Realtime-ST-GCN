@@ -10,7 +10,7 @@
             "args": [
                 "train",
                 "--config",
-                "config/kinetics/original_local.json"
+                "config/pku-mmd/original_local.json"
             ],
         },
         {
@@ -34,7 +34,9 @@
             "args": [
                 "test",
                 "--checkpoint",
-                "pretrained_models/kinetics/realtime/run_51240758_rt_69_20/epoch-19.pt"
+                "pretrained_models/pku-mmd/original/run_51296801/epoch-98.pt",
+                "--config",
+                "config/pku-mmd/realtime_local.json"
             ],
         },
         {

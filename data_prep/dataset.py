@@ -1,6 +1,7 @@
 import pickle
 import torch
 from torch.utils.data import Dataset
+import torch.nn.functional as F
 import numpy as np
 import pandas as pd
 import os
@@ -91,6 +92,8 @@ class SkeletonDatasetFromDirectory(Dataset):
         # create a list for indexing and mapping between features and labels
         self.dir_list = [file.split('.npy')[0] for file in os.listdir(self.data)]
 
+        self.max_len = max([np.load('{0}/{1}'.format(data_dir,file)).shape[1] for file in os.listdir(data_dir)])
+
     def __len__(self):
         return len(self.dir_list)
 
@@ -98,4 +101,16 @@ class SkeletonDatasetFromDirectory(Dataset):
         data = np.float32(np.load('{0}/{1}.npy'.format(self.data, self.dir_list[index]))[:,:,:,0])
         labels = np.int64(pd.read_csv('{0}/{1}.csv'.format(self.labels, self.dir_list[index]), header=None).values[:,0])
         
-        return torch.from_numpy(data), torch.from_numpy(labels)
+        data_shape = list(data.shape)
+        data_shape[1] = self.max_len
+
+        new_data = torch.zeros(data_shape)
+        new_labels = torch.zeros(self.max_len)
+
+        new_data[:,:data.shape[1],:] = torch.from_numpy(data)
+        new_labels[:labels.shape[0]] = torch.from_numpy(labels)
+
+        mask = torch.zeros(self.max_len)
+        mask[range(data.shape[1])] = 1
+
+        return new_data, new_labels, mask

@@ -12,9 +12,6 @@ import random
 import time
 import json
 
-# TODO:
-# 1. Implement benchmark functions for multi-GPU functions
-# 2. Setup all CLI arguments for the 3 commands
 
 def common(args):
     """Performs setup common to any ST-GCN model variant.
@@ -131,9 +128,6 @@ def train(args):
     # perform common setup around the model's black box
     args.graph, actions, device, train_dataloader, val_dataloader, save_dir = common(args)
     args.num_classes = len(actions)
-    
-    # record the length of captures
-    data, _ = next(iter(train_dataloader))
 
     # construct the target model using the CLI arguments
     model = build_model(args)
@@ -145,7 +139,7 @@ def train(args):
             torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
     # construct a processing wrapper
-    trainer = Processor(model, args.num_classes)
+    trainer = Processor(model, args.num_classes, train_dataloader)
 
     start_time = time.time()
 
@@ -181,7 +175,7 @@ def test(args):
     """
 
     # perform common setup around the model's black box
-    args.graph, actions, device, _, val_dataloader, save_dir = common(args)
+    args.graph, actions, device, val_dataloader, _, save_dir = common(args)
     args.num_classes = len(actions)
     
     # split between the subjects in the captures
@@ -190,12 +184,13 @@ def test(args):
 
     # construct the target model using the CLI arguments
     model = build_model(args)
+    model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
     # load the checkpoint if not trained from scratch
-    if args.checkpoint:
-        model.load_state_dict({
-            k.split('module.')[1]: v 
-            for k, v in
-            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+    # if args.checkpoint:
+    #     model.load_state_dict({
+    #         k.split('module.')[1]: v 
+    #         for k, v in
+    #         torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
     # construct a processing wrapper
     trainer = Processor(model, args.num_classes)

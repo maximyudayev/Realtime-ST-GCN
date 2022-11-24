@@ -95,7 +95,8 @@ class Processor:
     def __init__(
         self,
         model,
-        num_classes):
+        num_classes,
+        dataloader):
         """
         Args:
             model : ``torch.nn.Module``
@@ -103,11 +104,24 @@ class Processor:
             
             num_classes : ``int``
                 Number of action classification classes.
+
+            dataloader : ``torch.utils.data.DataLoader``
+                Data handle to account for its class imbalance in the CE loss.
         """
 
+        classes = torch.tensor(range(num_classes), dtype=torch.float32)
+        class_dist = torch.zeros(num_classes, dtype=torch.float32)
+
+        for _, labels, mask in dataloader:
+            class_dist += torch.sum(
+                torch.mul(
+                    labels[:,:,None] == classes[None].expand(labels.shape[1],-1),
+                    mask[:,:,None]),
+                dim=(0,1))
+
         self.model = model
-        self.ce = nn.CrossEntropyLoss(ignore_index=-100, reduction='mean')
-        self.mse = nn.MSELoss(reduction='mean')
+        self.ce = nn.CrossEntropyLoss(weight=1-class_dist/torch.sum(class_dist), reduction='mean')
+        self.mse = nn.MSELoss(reduction='none')
         self.num_classes = num_classes
 
 
@@ -164,6 +178,10 @@ class Processor:
         top1_acc_val_list = []
         top5_acc_val_list = []
         duration_val_list = []
+        ce_loss_list = []
+        mse_loss_list = []
+
+        captures, labels, mask = next(iter(train_dataloader))
 
         # train the model for num_epochs
         # (dataloader is automatically shuffled after each epoch)
@@ -177,6 +195,9 @@ class Processor:
             top5_correct = 0
             total = 0
 
+            ce_epoch_loss = 0
+            mse_epoch_loss = 0
+
             # decay learning rate every 10 epochs [ref: Yan 2018]
             if (epoch % 10 == 0):
                 self.update_lr(learning_rate, learning_rate_decay, epoch//10)
@@ -184,55 +205,60 @@ class Processor:
             epoch_start_time = time.time()
 
             # sweep through the training dataset in minibatches
-            for captures, labels in train_dataloader:
-                N, _, L, _ = captures.size()
-                # move both data to the compute device
-                # (captures is a batch of full-length captures, label is a batch of ground truths)
-                captures, labels = captures.to(device), labels.to(device)
+            # for captures, labels in train_dataloader:
                 
-                # zero the gradient buffers
-                self.optimizer.zero_grad()
-                
-                # make predictions and compute the loss
-                # forward pass the minibatch through the model for the corresponding subject
-                # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
-                # the output tensor has shape (N, C, L)
-                predictions = self.model(captures)
+            N, _, L, _ = captures.size()
+            # move both data to the compute device
+            # (captures is a batch of full-length captures, label is a batch of ground truths)
+            captures, labels, mask = captures.to(device), labels.to(device), mask.to(device)
+            
+            # zero the gradient buffers
+            self.optimizer.zero_grad()
+            
+            # make predictions and compute the loss
+            # forward pass the minibatch through the model for the corresponding subject
+            # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
+            # the output tensor has shape (N, C, L)
+            predictions = self.model(captures)
 
-                # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
-                # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
-                # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
-                # CE guides model toward absolute correctness on single frame predictions,
-                # MSE component punishes large variations in class probabilities between consecutive samples
-                loss = self.ce(predictions, labels)
-                loss += 0.15 * torch.mean(
-                    torch.clamp(
-                        self.mse(
-                            F.log_softmax(predictions[:,:,1:], dim=1), 
-                            F.log_softmax(predictions.detach()[:,:,:-1], dim=1)),
-                        min=0,
-                        max=16))
+            # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
+            # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
+            # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
+            # CE guides model toward absolute correctness on single frame predictions,
+            # MSE component punishes large variations in class probabilities between consecutive samples
+            ce_loss = self.ce(predictions, labels)
+            mse_loss = 0.15 * torch.mean(
+                torch.clamp(
+                    self.mse(
+                        F.log_softmax(predictions[:,:,1:], dim=1), 
+                        F.log_softmax(predictions.detach()[:,:,:-1], dim=1)),
+                    min=0,
+                    max=16))
 
-                epoch_loss += loss.data.item()
-                
-                # backward pass to compute the gradients
-                loss.backward()
+            loss = ce_loss + mse_loss
 
-                # update parameters based on the computed gradients
-                self.optimizer.step()
+            epoch_loss += loss.data.item()
+            ce_epoch_loss += ce_loss.data.item()
+            mse_epoch_loss += mse_loss.data.item()
+            
+            # backward pass to compute the gradients
+            loss.backward()
 
-                # calculate the predictions statistics
-                # this only sums the number of top-1/5 correctly predicted frames, but doesn't look at prediction jitter
-                _, top5_predicted = torch.topk(predictions, k=5, dim=1)
-                top1_predicted = top5_predicted[:,0,:]
+            # update parameters based on the computed gradients
+            self.optimizer.step()
 
-                top1_cor = torch.sum(top1_predicted == labels).data.item()
-                top1_correct += top1_cor
-                top5_cor = torch.sum(top5_predicted == labels[:,None,:]).data.item()
-                top5_correct += top5_cor
+            # calculate the predictions statistics
+            # this only sums the number of top-1/5 correctly predicted frames, but doesn't look at prediction jitter
+            _, top5_predicted = torch.topk(predictions, k=5, dim=1)
+            top1_predicted = top5_predicted[:,0,:]
 
-                tot = labels.numel()
-                total += tot
+            top1_cor = torch.sum(top1_predicted == labels).data.item()
+            top1_correct += top1_cor
+            top5_cor = torch.sum(top5_predicted == labels[:,None,:]).data.item()
+            top5_correct += top5_cor
+
+            tot = labels.numel()
+            total += tot
 
             epoch_end_time = time.time()
             duration_train = epoch_end_time - epoch_start_time
@@ -240,97 +266,116 @@ class Processor:
             top5_acc_train = top5_correct / total
             
             # checkpoint the model during training at specified epochs
-            if epoch in checkpoints:
-                torch.save({
-                    "epoch": epoch,
-                    "model_state_dict": self.model.state_dict(),
-                    "optimizer_state_dict": self.optimizer.state_dict(),
-                    "loss": epoch_loss,
-                    }, "{0}/epoch-{1}.pt".format(save_dir, epoch))
+            # if epoch in checkpoints:
+            #     torch.save({
+            #         "epoch": epoch,
+            #         "model_state_dict": self.model.state_dict(),
+            #         "optimizer_state_dict": self.optimizer.state_dict(),
+            #         "loss": epoch_loss,
+            #         }, "{0}/epoch-{1}.pt".format(save_dir, epoch))
             
-            # set layers to inference mode if behavior differs between train and prediction
-            # (prepares Dropout and BatchNormalization layers to enable and to freeze parameters, respectively)
-            self.model.eval()
+            # # set layers to inference mode if behavior differs between train and prediction
+            # # (prepares Dropout and BatchNormalization layers to enable and to freeze parameters, respectively)
+            # self.model.eval()
 
-            # test the model on the validation set
-            top1_acc_val, top5_acc_val, duration_val, confusion_matrix = validate_(
-                model=self.model, 
-                num_classes=self.num_classes,
-                dataloader=val_dataloader,
-                device=device)
+            # # test the model on the validation set
+            # top1_acc_val, top5_acc_val, duration_val, confusion_matrix = validate_(
+            #     model=self.model, 
+            #     num_classes=self.num_classes,
+            #     dataloader=val_dataloader,
+            #     device=device)
 
-            # save confusion matrix as a CSV file
-            pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion_matrix_epoch-{1}.csv'.format(save_dir, epoch))
+            # # save confusion matrix as a CSV file
+            # pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion_matrix_epoch-{1}.csv'.format(save_dir, epoch))
 
-            # log and send notifications
             print(
-                "[epoch {0}]: epoch loss = {1}, top1_acc_train = {2}, top5_acc_train = {3}, top1_acc_val = {4}, top5_acc_val = {5}"
+                "[epoch {0}]: epoch loss = {1}, top1_acc_train = {2}, top5_acc_train = {3}"
                 .format(
                     epoch, 
-                    epoch_loss / len(train_dataloader),
+                    epoch_loss,
                     top1_acc_train,
-                    top5_acc_train,
-                    top1_acc_val,
-                    top5_acc_val),
+                    top5_acc_train),
                 flush=True,
                 file=kwargs['log'][0])
-            print(
-                "[epoch {0}]: train_time = {1}, val_time = {2}"
-                .format(
-                    epoch,
-                    duration_train,
-                    duration_val),
-                flush=True,
-                file=kwargs['log'][0])
+
+            # # log and send notifications
+            # print(
+            #     "[epoch {0}]: epoch loss = {1}, top1_acc_train = {2}, top5_acc_train = {3}, top1_acc_val = {4}, top5_acc_val = {5}"
+            #     .format(
+            #         epoch, 
+            #         epoch_loss / len(train_dataloader),
+            #         top1_acc_train,
+            #         top5_acc_train,
+            #         top1_acc_val,
+            #         top5_acc_val),
+            #     flush=True,
+            #     file=kwargs['log'][0])
+            # print(
+            #     "[epoch {0}]: train_time = {1}, val_time = {2}"
+            #     .format(
+            #         epoch,
+            #         duration_train,
+            #         duration_val),
+            #     flush=True,
+            #     file=kwargs['log'][0])
 
             # send an email update
             epoch_list.insert(0, epoch)
             epoch_loss_list.insert(0, epoch_loss / len(train_dataloader))
+            ce_loss_list.insert(0, ce_epoch_loss / len(train_dataloader))
+            mse_loss_list.insert(0, mse_epoch_loss / len(train_dataloader))
             top1_acc_train_list.insert(0, top1_acc_train)
             top5_acc_train_list.insert(0, top5_acc_train)
             duration_train_list.insert(0, duration_train)
-            top1_acc_val_list.insert(0, top1_acc_val)
-            top5_acc_val_list.insert(0, top5_acc_val)
-            duration_val_list.insert(0, duration_val)
+            # top1_acc_val_list.insert(0, top1_acc_val)
+            # top5_acc_val_list.insert(0, top5_acc_val)
+            # duration_val_list.insert(0, duration_val)
 
             # format a stats table (in newest to oldest order) and send it by email
-            os.system(
-                'header="\n %-6s %5s %11s %11s %9s %9s %11s %9s\n";'
-                'format=" %-03d %4.6f %1.4f %1.4f %1.4f %1.4f %5.6f %5.6f\n";'
-                'printf "$header" "EPOCH" "LOSS" "TOP1_TRAIN" "TOP5_TRAIN" "TOP1_VAL" "TOP5_VAL" "TIME_TRAIN" "TIME_VAL" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
-                'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
-                'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: $PBS_JOBNAME status update" {2}'
-                .format(
-                    ' '.join([
-                        ' '.join([str(e) for e in t]) for t 
-                        in zip(
-                            epoch_list,
-                            epoch_loss_list,
-                            top1_acc_train_list,
-                            top5_acc_train_list,
-                            top1_acc_val_list,
-                            top5_acc_val_list,
-                            duration_train_list,
-                            duration_val_list)]),
-                    os.getenv('PBS_JOBID').split('.')[0],
-                    kwargs['email']))
+            # os.system(
+            #     'header="\n %-6s %5s %11s %11s %9s %9s %11s %9s\n";'
+            #     'format=" %-03d %4.6f %1.4f %1.4f %1.4f %1.4f %5.6f %5.6f\n";'
+            #     'printf "$header" "EPOCH" "LOSS" "TOP1_TRAIN" "TOP5_TRAIN" "TOP1_VAL" "TOP5_VAL" "TIME_TRAIN" "TIME_VAL" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
+            #     'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
+            #     'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: $PBS_JOBNAME status update" {2}'
+            #     .format(
+            #         ' '.join([
+            #             ' '.join([str(e) for e in t]) for t 
+            #             in zip(
+            #                 epoch_list,
+            #                 epoch_loss_list,
+            #                 top1_acc_train_list,
+            #                 top5_acc_train_list,
+            #                 top1_acc_val_list,
+            #                 top5_acc_val_list,
+            #                 duration_train_list,
+            #                 duration_val_list)]),
+            #         os.getenv('PBS_JOBID').split('.')[0],
+            #         kwargs['email']))
 
             # save (update) train-validation curve as a CSV file after each epoch
             pd.DataFrame(
                 data={
                     'top1_train': top1_acc_train_list,
-                    'top1_val': top1_acc_val_list,
+                    # 'top1_val': top1_acc_val_list,
                     'top5_train': top5_acc_train_list,
-                    'top5_val': top5_acc_val_list
+                    # 'top5_val': top5_acc_val_list
                 }).to_csv('{0}/train-validation-curve.csv'.format(save_dir))
 
+            # save (update) loss curve as a CSV file after each epoch
+            pd.DataFrame(
+                data={
+                    'ce': ce_loss_list,
+                    'mse': mse_loss_list,
+                }).to_csv('{0}/loss-curve.csv'.format(save_dir))
+
         # save the final model
-        torch.save({
-            "epoch": epoch,
-            "model_state_dict": self.model.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict(),
-            "loss": epoch_loss,
-            }, "{0}/final.pt".format(save_dir))
+        # torch.save({
+        #     "epoch": epoch,
+        #     "model_state_dict": self.model.state_dict(),
+        #     "optimizer_state_dict": self.optimizer.state_dict(),
+        #     "loss": epoch_loss,
+        #     }, "{0}/final.pt".format(save_dir))
 
         return
 
