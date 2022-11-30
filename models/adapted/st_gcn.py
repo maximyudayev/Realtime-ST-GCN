@@ -6,7 +6,7 @@ from models.utils.graph import Graph
 
 
 class Model(nn.Module):
-    """Original spatial temporal graph convolutional networks.
+    """Spatial temporal graph convolutional networks, adapted for segmentation.
 
     Args:
         in_channels (int): Number of channels in the input data
@@ -26,8 +26,6 @@ class Model(nn.Module):
 
     def __init__(self, **kwargs):
         super().__init__()
-
-        self.conf = kwargs
 
         # load graph
         self.graph = Graph(strategy=kwargs['strategy'], **kwargs['graph'])
@@ -72,19 +70,6 @@ class Model(nn.Module):
 
 
     def forward(self, x):
-        # # data normalization
-        # N, C, T, V, M = x.size()
-        # # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
-        # # this incures extra overhead
-        # x = x.permute(0, 4, 3, 1, 2).contiguous()
-        # # (N,M,V,C,T)
-        # x = x.view(N * M, V * C, T)
-        # x = self.data_bn(x)
-        # x = x.view(N, M, V, C, T)
-        # x = x.permute(0, 1, 3, 4, 2).contiguous()
-        # x = x.view(N * M, C, T, V)
-        # # (N',C,T,V)
-
         # data normalization
         N, C, T, V = x.size()
         # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
@@ -100,31 +85,16 @@ class Model(nn.Module):
         # remap the features to the network size
         x = self.fcn_in(x)
 
-        # zero pad the input across time from start by the receptive field size
-        x = F.pad(x, (0,0,self.conf['receptive_field'],0))
-        # create empty tensor of anticipated size to store logits
-        # the output has either same temporal resolution (overlapping window)
-        # or reduced by the factor of the receptive window (non-overlapping window)
-        # TODO: adjust the evaluation metric to account for the non-overlapping window case
-        size = list(x.shape)
-        stride = self.conf['receptive_field'] if self.conf['latency'] else 1
-        size[1] = self.conf['num_classes']
-        size[2] //= stride
-        size[3] = 1
-        y = torch.zeros(size, dtype=torch.float32)
-        for i in range(size[2]):
-            x_sub = x[:,:,i*stride:i*stride+self.conf['receptive_field']]
+        # forward
+        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
+            x, _ = gcn(x, self.A * importance)
 
-            # forward
-            for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-                x_sub, _ = gcn(x_sub, self.A * importance)
+        # global pooling
+        x = F.avg_pool2d(x, (1, x.size()[-1]))
 
-            # global pooling (across time L, and nodes V)
-            x_sub = F.avg_pool2d(x_sub, x_sub.size()[2:])
-
-            # prediction
-            x_sub = self.fcn(x_sub)
-            y[i] = x_sub.squeeze(-1)
+        # prediction
+        x = self.fcn(x)
+        x = x.squeeze(-1)
 
         return x
 
@@ -150,8 +120,8 @@ class Model(nn.Module):
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
             x, _ = gcn(x, self.A * importance)
 
-        # global pooling (across time L, and nodes V)
-        x = F.avg_pool2d(x, x.size()[2:])
+        # global pooling
+        x = F.avg_pool2d(x, (1, x.size()[-1]))
 
         feature = x.squeeze(-1)
 
@@ -212,7 +182,7 @@ class st_gcn(nn.Module):
                 out_channels,
                 out_channels,
                 (kernel_size[0], 1),
-                stride=(stride, 1),
+                dilation=(stride, 1),
                 padding=padding),
             nn.BatchNorm2d(out_channels),
             nn.Dropout(dropout, inplace=True))

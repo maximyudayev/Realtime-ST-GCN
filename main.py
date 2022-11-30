@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import DataLoader
 from data_prep.dataset import SkeletonDataset, SkeletonDatasetFromDirectory
 from models.proposed.st_gcn import Stgcn
+from models.adapted.st_gcn import Model as AdaptedStgcn
 from models.original.st_gcn import Model as OriginalStgcn
 from processor import Processor
 import st_gcn_parser
@@ -112,6 +113,8 @@ def build_model(args):
     
     if args.model == 'original':
         model = OriginalStgcn(**vars(args))
+    elif args.model == 'adapted':
+        model = AdaptedStgcn(**vars(args))
     else:
         # all 3 adapted versions are encapsulated in the same class, training is identical (batch mode),
         # usecase changes applied during inference
@@ -292,6 +295,7 @@ if __name__ == '__main__':
             \r\t[--kernel [KERNEL]]
             \r\t[--importance]
             \r\t[--latency]
+            \r\t[--receptive_field FIELD]
             \r\t[--layers [LAYERS]]
             \r\t[--in_ch [IN_CH,[...]]]
             \r\t[--out_ch [OUT_CH,[...]]]
@@ -382,8 +386,14 @@ if __name__ == '__main__':
         '--latency',
         default=False,
         action='store_true',
-        help='flag specifying whether ST-GCN layers have half-buffer latency '
-            '(default: False)')
+        help='flag specifying whether ST-GCN layers have half-buffer latency, '
+            'or non-overlapping window when --model=original (default: False)')
+    parser_train_model.add_argument(
+        '--receptive_field',
+        type=int,
+        metavar='',
+        help='number of frames in a sliding window across raw inputs. '
+            'Applied only when --model=original (default: 50)')
     parser_train_model.add_argument(
         '--layers',
         type=int,

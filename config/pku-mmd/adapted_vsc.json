@@ -1,6 +1,6 @@
 {
     "model": {
-        "model": "original",
+        "model": "adapted",
         "strategy": "spatial",
         "data": "/scratch/leuven/341/vsc34153/rt_st_gcn/data/pku-mmd",
         "dataset_type": "dir",
@@ -13,7 +13,6 @@
         "kernel": [9],
         "latency": false,
         "importance": true,
-        "receptive_field": 50,
         "in_ch": [
             [64,64,64,64,128,128,128,256,256]
         ],
