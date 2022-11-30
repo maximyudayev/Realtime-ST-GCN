@@ -48,8 +48,11 @@ def common(args):
         train_data = SkeletonDatasetFromDirectory('{0}/train/features'.format(args.data), '{0}/train/labels'.format(args.data))
         val_data = SkeletonDatasetFromDirectory('{0}/val/features'.format(args.data), '{0}/val/labels'.format(args.data))
 
-    train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    val_dataloader = DataLoader(val_data, batch_size=args.batch_size, shuffle=True)
+    # trials of different length can not be placed in the same tensor when batching, have to manually iterate over them
+    batch_size = 1 if args.dataset_type == 'dir' else args.batch_size
+    
+    train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
     
     # extract skeleton graph data
     with open(args.graph, 'r') as graph_file:

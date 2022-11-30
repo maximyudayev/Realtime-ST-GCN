@@ -44,9 +44,9 @@
             70,71,72,73,74,75,76,77,78,79,
             80,81,82,83,84,85,86,87,88,89,
             90,91,92,93,94,95,96,97,98],
-        "learning_rate": 0.01,
-        "learning_rate_decay": 0.1,
-        "batch_size": 1
+        "learning_rate": 0.0005,
+        "learning_rate_decay": 1.0,
+        "batch_size": 32
     },
     "job": {
         "email": "maxim.yudayev@kuleuven.be"
