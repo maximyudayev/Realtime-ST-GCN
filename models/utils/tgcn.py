@@ -56,7 +56,7 @@ class ConvTemporalGraphical(nn.Module):
 
     def forward(self, x, A):
         """TODO: verify if .view() turns multi-dimensional tensor into a matrix 
-        and does an incorrect dor product.
+        and does an incorrect dot product.
         """
 
         assert A.size(1) == self.kernel_size

@@ -5,10 +5,13 @@ debug
 # exact directories
 .vscode/*
 data/*
-pretrained_models/
+pretrained_models/*
+pretrained_models/pku-mmd/*
 
 # exceptions
 !data/skeletons
+!pretrained_models/pku-mmd/
+!pretrained_models/**/train-validation-curve.ods
 !.vscode/launch.json
 
 # file extensions

@@ -34,9 +34,9 @@
         "seed": 1538574472,
         "epochs": 100,
         "checkpoints": [9,19,29,39,49,59,69,79,89],
-        "learning_rate": 0.01,
-        "learning_rate_decay": 0.1,
-        "batch_size": 1
+        "learning_rate": 0.0005,
+        "learning_rate_decay": 1.0,
+        "batch_size": 2
     },
     "job": {
         "email": "maxim.yudayev@kuleuven.be"

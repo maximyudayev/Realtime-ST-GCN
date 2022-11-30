@@ -98,17 +98,21 @@ Kinetics dataset, 400 action classes, dimensions:
   Train - (240436, 3, 300, 18, 2)
   Validation - (19796, 3, 300, 18, 2)
 
-NTU-RGB-D, 60 action classes, subject dataset dimensions:
-  Train - (40091, 3, 300, 25, 2)
-  Validation - (16487, 3, 300, 25, 2)
-
-NTU-RGB-D, 60 action classes, view dataset dimensions:
+NTU-RGB-D, 60 action classes, cross-view dataset dimensions:
   Train - (37646, 3, 300, 25, 2)
   Validation - (18932, 3, 300, 25, 2)
 
-PKU-MMD, 51 action classes, view dataset dimensions (each trial may differ in duration):
+NTU-RGB-D, 60 action classes, cross-subject dataset dimensions:
+  Train - (40091, 3, 300, 25, 2)
+  Validation - (16487, 3, 300, 25, 2)
+
+PKU-MMD, 51 action classes, cross-view dataset dimensions (each trial may differ in duration):
   Train - (671, 3, ..., 25, 1)
   Validation - (338, 3, ..., 25, 1)
+
+PKU-MMD, 51 action classes, cross-subject dataset dimensions (each trial may differ in duration):
+  Train - (775, 3, ..., 25, 1)
+  Validation - (234, 3, ..., 25, 1)
 
 ### Config Structure
 Config files configure the execution script, model architecture, optimizer settings, training state, etc. This provides separation of concern and clean abstraction from source code for the user to prototype the model on various use cases and configuration by simply editing or providing a new JSON file to the execution script.

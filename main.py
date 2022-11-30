@@ -12,9 +12,6 @@ import random
 import time
 import json
 
-# TODO:
-# 1. Implement benchmark functions for multi-GPU functions
-# 2. Setup all CLI arguments for the 3 commands
 
 def common(args):
     """Performs setup common to any ST-GCN model variant.
@@ -51,8 +48,11 @@ def common(args):
         train_data = SkeletonDatasetFromDirectory('{0}/train/features'.format(args.data), '{0}/train/labels'.format(args.data))
         val_data = SkeletonDatasetFromDirectory('{0}/val/features'.format(args.data), '{0}/val/labels'.format(args.data))
 
-    train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-    val_dataloader = DataLoader(val_data, batch_size=args.batch_size, shuffle=True)
+    # trials of different length can not be placed in the same tensor when batching, have to manually iterate over them
+    batch_size = 1 if args.dataset_type == 'dir' else args.batch_size
+    
+    train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
     
     # extract skeleton graph data
     with open(args.graph, 'r') as graph_file:
@@ -131,9 +131,6 @@ def train(args):
     # perform common setup around the model's black box
     args.graph, actions, device, train_dataloader, val_dataloader, save_dir = common(args)
     args.num_classes = len(actions)
-    
-    # record the length of captures
-    data, _ = next(iter(train_dataloader))
 
     # construct the target model using the CLI arguments
     model = build_model(args)
@@ -145,7 +142,7 @@ def train(args):
             torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
     # construct a processing wrapper
-    trainer = Processor(model, args.num_classes)
+    trainer = Processor(model, args.num_classes, train_dataloader)
 
     start_time = time.time()
 
@@ -181,7 +178,7 @@ def test(args):
     """
 
     # perform common setup around the model's black box
-    args.graph, actions, device, _, val_dataloader, save_dir = common(args)
+    args.graph, actions, device, val_dataloader, _, save_dir = common(args)
     args.num_classes = len(actions)
     
     # split between the subjects in the captures
@@ -190,12 +187,13 @@ def test(args):
 
     # construct the target model using the CLI arguments
     model = build_model(args)
+    model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
     # load the checkpoint if not trained from scratch
-    if args.checkpoint:
-        model.load_state_dict({
-            k.split('module.')[1]: v 
-            for k, v in
-            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+    # if args.checkpoint:
+    #     model.load_state_dict({
+    #         k.split('module.')[1]: v 
+    #         for k, v in
+    #         torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
     # construct a processing wrapper
     trainer = Processor(model, args.num_classes)
