@@ -72,19 +72,6 @@ class Model(nn.Module):
 
 
     def forward(self, x):
-        # # data normalization
-        # N, C, T, V, M = x.size()
-        # # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
-        # # this incures extra overhead
-        # x = x.permute(0, 4, 3, 1, 2).contiguous()
-        # # (N,M,V,C,T)
-        # x = x.view(N * M, V * C, T)
-        # x = self.data_bn(x)
-        # x = x.view(N, M, V, C, T)
-        # x = x.permute(0, 1, 3, 4, 2).contiguous()
-        # x = x.view(N * M, C, T, V)
-        # # (N',C,T,V)
-
         # data normalization
         N, C, T, V = x.size()
         # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
@@ -101,16 +88,13 @@ class Model(nn.Module):
         x = self.fcn_in(x)
 
         # zero pad the input across time from start by the receptive field size
-        x = F.pad(x, (0,0,self.conf['receptive_field'],0))
+        x = F.pad(x, (0,0,self.conf['receptive_field']-1,0))
         # create empty tensor of anticipated size to store logits
         # the output has either same temporal resolution (overlapping window)
         # or reduced by the factor of the receptive window (non-overlapping window)
         # TODO: adjust the evaluation metric to account for the non-overlapping window case
-        size = list(x.shape)
         stride = self.conf['receptive_field'] if self.conf['latency'] else 1
-        size[1] = self.conf['num_classes']
-        size[2] //= stride
-        size[3] = 1
+        size = [N, self.conf['num_classes'], (T - 1) // stride + 1]
         y = torch.zeros(size, dtype=torch.float32)
         for i in range(size[2]):
             x_sub = x[:,:,i*stride:i*stride+self.conf['receptive_field']]
@@ -124,9 +108,9 @@ class Model(nn.Module):
 
             # prediction
             x_sub = self.fcn(x_sub)
-            y[i] = x_sub.squeeze(-1)
+            y[:,:,i] = x_sub.squeeze(-1).squeeze(-1)
 
-        return x
+        return y
 
 
     def extract_feature(self, x):
@@ -197,7 +181,7 @@ class st_gcn(nn.Module):
 
         assert len(kernel_size) == 2
         assert kernel_size[0] % 2 == 1
-        padding = (((kernel_size[0] - 1) // 2) * stride, 0)
+        padding = (((kernel_size[0] - 1) // 2), 0)
 
         self.gcn = ConvTemporalGraphical(
             in_channels, 
@@ -228,7 +212,8 @@ class st_gcn(nn.Module):
                 nn.Conv2d(
                     in_channels,
                     out_channels,
-                    kernel_size=1),
+                    kernel_size=1,
+                    stride=(stride, 1)),
                 nn.BatchNorm2d(out_channels))
 
         self.relu = nn.ReLU(inplace=True)

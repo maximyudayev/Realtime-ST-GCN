@@ -35,6 +35,8 @@ root/
 │   └── pku-mmd/
 │       ├── original_local.json
 │       ├── original_vsc.json
+│       ├── adapted_local.json
+│       ├── adapted_vsc.json
 │       ├── realtime_local.json
 │       └── realtime_vsc.json
 ├── data/
@@ -48,6 +50,8 @@ root/
 │   ├── pku-mmd/
 │   │   ├── train/
 │   │   ├── val/
+│   │   ├── train_xsubject/
+│   │   ├── val_xsubject/
 │   │   └── actions.txt
 │   └── skeletons/
 │       ├── openpose.json
@@ -59,6 +63,8 @@ root/
 ├── models/
 │   ├── original/
 │   │   └── st_gcn.py
+│   ├── adapted/
+│   │   └── st_gcn.py
 │   ├── proposed/
 │   │   ├── st_gcn.py
 │   │   └── test_stg_gcn.py
@@ -68,7 +74,9 @@ root/
 │       └── tgcn.py
 ├── pretrained_models/
 │   ├── kinetics/
-│   └── pku-mmd/
+│   ├── pku-mmd/
+│   ├── pku-mmd-xsubject/
+│   └── train-validation-curve.ods
 ├── local/
 │   └── st_gcn.sh
 ├── vsc/
@@ -94,25 +102,25 @@ Data and pretrained models directories are not tracked by the repository and mus
 
 Datasets provide data as a 5D tensor in the format (N-batch, C-channels, L-length, V-nodes, M-skeletons), with labels as a 1D tensor (N-batch): meaning the datasets are limited to multiple skeletons in the scene either performing the same action or being involved in a mutual activity (salsa, boxing, etc.). In a real application, each skeleton in the scene may be independent from others requiring own prediction and label. Moreover, a skeleton may perform multiple different actions while in the always-on scene: action segmentation is done on a frame-by-frame basis, rather than on the entire video capture (training data guarantees only 1 qualifying action in each capture, but requires broadcasting of labels across time and skeletons for frame-by-frame model training, to be applicable to realtime always-on classifier).
 
-Kinetics dataset, 400 action classes, dimensions:
-  Train - (240436, 3, 300, 18, 2)
-  Validation - (19796, 3, 300, 18, 2)
+* Kinetics dataset, 400 action classes, dimensions:
+  * Train - (240436, 3, 300, 18, 2)
+  * Validation - (19796, 3, 300, 18, 2)
 
-NTU-RGB-D, 60 action classes, cross-view dataset dimensions:
-  Train - (37646, 3, 300, 25, 2)
-  Validation - (18932, 3, 300, 25, 2)
+* NTU-RGB-D, 60 action classes, cross-view dataset dimensions:
+  * Train - (37646, 3, 300, 25, 2)
+  * Validation - (18932, 3, 300, 25, 2)
 
-NTU-RGB-D, 60 action classes, cross-subject dataset dimensions:
-  Train - (40091, 3, 300, 25, 2)
-  Validation - (16487, 3, 300, 25, 2)
+* NTU-RGB-D, 60 action classes, cross-subject dataset dimensions:
+  * Train - (40091, 3, 300, 25, 2)
+  * Validation - (16487, 3, 300, 25, 2)
 
-PKU-MMD, 51 action classes, cross-view dataset dimensions (each trial may differ in duration):
-  Train - (671, 3, ..., 25, 1)
-  Validation - (338, 3, ..., 25, 1)
+* PKU-MMD, 51 action classes, cross-view dataset dimensions (each trial may differ in duration):
+  * Train - (671, 3, ..., 25, 1)
+  * Validation - (338, 3, ..., 25, 1)
 
-PKU-MMD, 51 action classes, cross-subject dataset dimensions (each trial may differ in duration):
-  Train - (775, 3, ..., 25, 1)
-  Validation - (234, 3, ..., 25, 1)
+* PKU-MMD, 51 action classes, cross-subject dataset dimensions (each trial may differ in duration):
+  * Train - (775, 3, ..., 25, 1)
+  * Validation - (234, 3, ..., 25, 1)
 
 ### Config Structure
 Config files configure the execution script, model architecture, optimizer settings, training state, etc. This provides separation of concern and clean abstraction from source code for the user to prototype the model on various use cases and configuration by simply editing or providing a new JSON file to the execution script.

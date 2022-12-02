@@ -13,6 +13,7 @@
         "kernel": [9],
         "latency": false,
         "importance": true,
+        "receptive_field": 50,
         "in_ch": [
             [64,64,64,64,128,128,128,256,256]
         ],

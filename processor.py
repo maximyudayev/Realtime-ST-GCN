@@ -43,7 +43,7 @@ class Processor:
 
         for _, labels in dataloader:
             class_dist += torch.sum(
-                labels[:,:,None] == classes[None].expand(labels.shape[1],-1),
+                (labels[:,:,None].to(torch.float32) == classes[None].expand(labels.shape[1],-1)).to(torch.float32),
                 dim=(0,1))
 
         self.model = model
