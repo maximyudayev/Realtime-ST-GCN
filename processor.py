@@ -25,7 +25,8 @@ class Processor:
         self,
         model,
         num_classes,
-        dataloader):
+        dataloader,
+        device):
         """
         Args:
             model : ``torch.nn.Module``
@@ -47,7 +48,7 @@ class Processor:
                 dim=(0,1))
 
         self.model = model
-        self.ce = nn.CrossEntropyLoss(weight=1-class_dist/torch.sum(class_dist), reduction='mean')
+        self.ce = nn.CrossEntropyLoss(weight=(1-class_dist/torch.sum(class_dist)).to(device=device), reduction='mean')
         self.mse = nn.MSELoss(reduction='none')
         self.num_classes = num_classes
 
@@ -228,7 +229,7 @@ class Processor:
 
             # sweep through the training dataset in minibatches
             for i, (captures, labels) in enumerate(train_dataloader):
-                N, _, L, _ = captures.size()
+                N, _, _, _ = captures.size()
                 # move both data to the compute device
                 # (captures is a batch of full-length captures, label is a batch of ground truths)
                 captures, labels = captures.to(device), labels.to(device)

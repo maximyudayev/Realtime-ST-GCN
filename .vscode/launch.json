@@ -2,7 +2,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Local Python: Original Scratch",
+            "name": "Train Original",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
@@ -14,7 +14,7 @@
             ],
         },
         {
-            "name": "Local Python: Proposed Scratch",
+            "name": "Train Proposed",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
@@ -26,7 +26,19 @@
             ],
         },
         {
-            "name": "Local Python: Proposed Test",
+            "name": "Train Adapted",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "train",
+                "--config",
+                "config/pku-mmd/adapted_local.json"
+            ],
+        },
+        {
+            "name": "Test Proposed",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
@@ -40,7 +52,7 @@
             ],
         },
         {
-            "name": "Local Python: Original Resume",
+            "name": "Train Original Resume",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
@@ -54,7 +66,7 @@
             ],
         },
         {
-            "name": "Local Python: Proposed Resume",
+            "name": "Train Proposed Resume",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
@@ -66,7 +78,7 @@
             ],
         },
         {
-            "name": "VSC Python: Current File",
+            "name": "VSC Train Current File",
             "type": "python",
             "request": "launch",
             "program": "${file}",

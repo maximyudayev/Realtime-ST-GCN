@@ -145,7 +145,7 @@ def train(args):
             torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
     # construct a processing wrapper
-    trainer = Processor(model, args.num_classes, train_dataloader)
+    trainer = Processor(model, args.num_classes, train_dataloader, device)
 
     start_time = time.time()
 
