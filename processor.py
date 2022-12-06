@@ -233,12 +233,29 @@ class Processor:
                 # move both data to the compute device
                 # (captures is a batch of full-length captures, label is a batch of ground truths)
                 captures, labels = captures.to(device), labels.to(device)
-                
+
+                if kwargs['dataset_type'] == 'dir' and kwargs['model'] == 'original':
+                    # zero pad the input across time from start by the receptive field size
+                    # TODO: adjust the evaluation metric to account for the non-overlapping window case
+                    captures = F.pad(captures, (0,0,kwargs['receptive_field']-1,0))
+                    stride = kwargs['receptive_field'] if kwargs['latency'] else 1
+                    captures = captures.unfold(2, kwargs['receptive_field'], stride)
+                    N, C, N_new, V, T_new = captures.size()
+                    # (N,C,N',V,T') -> batches of unfolded slices
+                    captures = captures.permute(0, 2, 1, 4, 3).contiguous()
+                    captures = captures.view(N * N_new, C, T_new, V)
+                    # (N'',C,T',V)
+
                 # make predictions and compute the loss
                 # forward pass the minibatch through the model for the corresponding subject
                 # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
                 # the output tensor has shape (N, C, L)
                 predictions = self.model(captures)
+
+                if kwargs['dataset_type'] == 'dir' and kwargs['model'] == 'original':
+                    # arrange tensor back into a time series
+                    predictions = predictions.view(N, N_new, predictions.size(1))
+                    predictions = predictions.permute(0, 2, 1)
 
                 # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
                 # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)

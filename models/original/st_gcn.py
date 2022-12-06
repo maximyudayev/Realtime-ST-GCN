@@ -6,7 +6,11 @@ from models.utils.graph import Graph
 
 
 class Model(nn.Module):
-    """Original spatial temporal graph convolutional networks.
+    """Original classification spatial temporal graph convolutional networks.
+
+    Data provision (batching, unfolding, etc.) is delegated to the caller. Model operates 
+    on frame-by-frame basis and only requires an input buffer supplied to in the size of
+    the requested receptive field.
 
     Args:
         in_channels (int): Number of channels in the input data
@@ -66,7 +70,7 @@ class Model(nn.Module):
 
         # fcn for prediction
         self.fcn = nn.Conv2d(
-            kwargs['out_ch'][-1][-1], 
+            kwargs['out_ch'][-1][-1],
             out_channels=kwargs['num_classes'],
             kernel_size=1)
 
@@ -87,30 +91,17 @@ class Model(nn.Module):
         # remap the features to the network size
         x = self.fcn_in(x)
 
-        # zero pad the input across time from start by the receptive field size
-        x = F.pad(x, (0,0,self.conf['receptive_field']-1,0))
-        # create empty tensor of anticipated size to store logits
-        # the output has either same temporal resolution (overlapping window)
-        # or reduced by the factor of the receptive window (non-overlapping window)
-        # TODO: adjust the evaluation metric to account for the non-overlapping window case
-        stride = self.conf['receptive_field'] if self.conf['latency'] else 1
-        size = [N, self.conf['num_classes'], (T - 1) // stride + 1]
-        y = torch.zeros(size, dtype=torch.float32)
-        for i in range(size[2]):
-            x_sub = x[:,:,i*stride:i*stride+self.conf['receptive_field']]
+        # forward
+        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
+            x, _ = gcn(x, self.A * importance)
 
-            # forward
-            for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-                x_sub, _ = gcn(x_sub, self.A * importance)
+        # global pooling (across time L, and nodes V)
+        x = F.avg_pool2d(x, x.size()[2:])
 
-            # global pooling (across time L, and nodes V)
-            x_sub = F.avg_pool2d(x_sub, x_sub.size()[2:])
+        # prediction
+        x = self.fcn(x)
 
-            # prediction
-            x_sub = self.fcn(x_sub)
-            y[:,:,i] = x_sub.squeeze(-1).squeeze(-1)
-
-        return y
+        return x
 
 
     def extract_feature(self, x):

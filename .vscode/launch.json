@@ -22,7 +22,9 @@
             "args": [
                 "train",
                 "--config",
-                "config/pku-mmd/realtime_local.json"
+                "config/pku-mmd/realtime_local.json",
+                "--checkpoint",
+                "pretrained_models/pku-mmd/realtime/run_51339605/final.pt"
             ],
         },
         {
@@ -34,7 +36,9 @@
             "args": [
                 "train",
                 "--config",
-                "config/pku-mmd/adapted_local.json"
+                "config/pku-mmd/adapted_local.json",
+                "--checkpoint",
+                "pretrained_models/pku-mmd/adapted/run_51339647/final.pt"
             ],
         },
         {
