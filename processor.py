@@ -5,7 +5,8 @@ from torch import optim
 import pandas as pd
 import time
 import os
-
+import torch.utils.checkpoint as chkpt
+from torch.autograd import Variable
 
 class Processor:
     """ST-GCN processing wrapper for training and testing the model.
@@ -61,6 +62,67 @@ class Processor:
             g['lr'] = rate
 
 
+    def forward_(
+        self,
+        captures,
+        labels,
+        device,
+        **kwargs):
+
+        N, _, _, _ = captures.size()
+        # move both data to the compute device
+        # (captures is a batch of full-length captures, label is a batch of ground truths)
+        captures, labels = captures.to(device), labels.to(device)
+
+        if kwargs['dataset_type'] == 'dir' and kwargs['model'] == 'original':
+            # zero pad the input across time from start by the receptive field size
+            # TODO: adjust the evaluation metric to account for the non-overlapping window case
+            captures = F.pad(captures, (0,0,kwargs['receptive_field']-1,0))
+            stride = kwargs['receptive_field'] if kwargs['latency'] else 1
+            captures = captures.unfold(2, kwargs['receptive_field'], stride)
+            N, C, N_new, V, T_new = captures.size()
+            # (N,C,N',V,T') -> batches of unfolded slices
+            captures = captures.permute(0, 2, 1, 4, 3).contiguous()
+            captures = captures.view(N * N_new, C, T_new, V)
+            # (N'',C,T',V)
+
+        # make predictions and compute the loss
+        # forward pass the minibatch through the model for the corresponding subject
+        # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
+        # the output tensor has shape (N, C, L)
+        predictions = chkpt.checkpoint(self.model, Variable(captures, requires_grad=True))
+
+        if kwargs['dataset_type'] == 'dir' and kwargs['model'] == 'original':
+            # arrange tensor back into a time series
+            predictions = predictions.view(N, N_new, predictions.size(1))
+            predictions = predictions.permute(0, 2, 1)
+
+        # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
+        # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
+        # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
+        # CE guides model toward absolute correctness on single frame predictions,
+        # MSE component punishes large variations in class probabilities between consecutive samples
+        ce = self.ce(predictions, labels)
+        mse = 0.15 * torch.mean(
+            torch.clamp(
+                self.mse(
+                    F.log_softmax(predictions[:,:,1:], dim=1), 
+                    F.log_softmax(predictions.detach()[:,:,:-1], dim=1)),
+                min=0,
+                max=16))
+
+        # calculate the predictions statistics
+        # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
+        _, top5_predicted = torch.topk(predictions, k=5, dim=1)
+        top1_predicted = top5_predicted[:,0,:]
+
+        top1_cor = torch.sum(top1_predicted == labels).data.item()
+        top5_cor = torch.sum(top5_predicted == labels[:,None,:]).data.item()
+        tot = labels.numel()
+
+        return top1_predicted, top5_predicted, top1_cor, top5_cor, tot, ce, mse
+
+
     def validate_(
         self,
         dataloader,
@@ -71,11 +133,6 @@ class Processor:
         Shared between train and test scripts: train invokes it after each epoch trained,
         test invokes it once for inference only.
         """
-
-        # # sets all layers into evaluation mode except the dropout layers
-        # for layer in model.modules():
-        #     if isinstance(layer, nn.Dropout):
-        #         layer.train()
 
         # do not record gradients
         with torch.no_grad():    
@@ -94,43 +151,21 @@ class Processor:
             # sweep through the training dataset in minibatches
             for captures, labels in dataloader:
                 N, _, L, _ = captures.size()
-                # move both data to the compute device
-                # (captures is a batch of full-length captures, label is a batch of ground truths)
-                captures, labels = captures.to(device), labels.to(device)
+                top1_predicted, _, top1_cor, top5_cor, tot, ce, mse = self.forward_(captures, labels, device, **kwargs)
 
-                # make predictions and compute the loss
-                # forward pass the minibatch through the model for the corresponding subject
-                # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
-                # the output tensor has shape (N, C, L)
-                predictions = self.model(captures)
+                top1_correct += top1_cor
+                top5_correct += top5_cor
+                total += tot
 
-                ce = self.ce(predictions, labels)
-                mse = 0.15 * torch.mean(
-                    torch.clamp(
-                        self.mse(
-                            F.log_softmax(predictions[:,:,1:], dim=1), 
-                            F.log_softmax(predictions.detach()[:,:,:-1], dim=1)),
-                        min=0,
-                        max=16))
-                
                 # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
                 # which will then be averaged across the entire dataset size, since
                 # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
+                # (used for statistics)
                 ce_epoch_loss_val += (ce*N).data.item()
                 mse_epoch_loss_val += (mse*N).data.item()
 
-                # calculate the predictions statistics
-                # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
-                _, top5_predicted = torch.topk(predictions, k=5, dim=1)
-                top1_predicted = top5_predicted[:,0,:]
-
-                top1_cor = torch.sum(top1_predicted == labels).data.item()
-                top1_correct += top1_cor
-                top5_cor = torch.sum(top5_predicted == labels[:,None,:]).data.item()
-                top5_correct += top5_cor
-
-                tot = labels.numel()
-                total += tot
+                # delete unnecessary computational graph references to clear space
+                del ce, mse
 
                 # collect the correct predictions for each class and total per that class
                 # for batch_el in range(N*M):
@@ -230,50 +265,12 @@ class Processor:
             # sweep through the training dataset in minibatches
             for i, (captures, labels) in enumerate(train_dataloader):
                 N, _, _, _ = captures.size()
-                # move both data to the compute device
-                # (captures is a batch of full-length captures, label is a batch of ground truths)
-                captures, labels = captures.to(device), labels.to(device)
 
-                if kwargs['dataset_type'] == 'dir' and kwargs['model'] == 'original':
-                    # zero pad the input across time from start by the receptive field size
-                    # TODO: adjust the evaluation metric to account for the non-overlapping window case
-                    captures = F.pad(captures, (0,0,kwargs['receptive_field']-1,0))
-                    stride = kwargs['receptive_field'] if kwargs['latency'] else 1
-                    captures = captures.unfold(2, kwargs['receptive_field'], stride)
-                    N, C, N_new, V, T_new = captures.size()
-                    # (N,C,N',V,T') -> batches of unfolded slices
-                    captures = captures.permute(0, 2, 1, 4, 3).contiguous()
-                    captures = captures.view(N * N_new, C, T_new, V)
-                    # (N'',C,T',V)
+                _, _, top1_cor, top5_cor, tot, ce, mse = self.forward_(captures, labels, device, **kwargs)
 
-                # make predictions and compute the loss
-                # forward pass the minibatch through the model for the corresponding subject
-                # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
-                # the output tensor has shape (N, C, L)
-                predictions = self.model(captures)
-
-                if kwargs['dataset_type'] == 'dir' and kwargs['model'] == 'original':
-                    # arrange tensor back into a time series
-                    predictions = predictions.view(N, N_new, predictions.size(1))
-                    predictions = predictions.permute(0, 2, 1)
-
-                # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
-                # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
-                # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
-                # CE guides model toward absolute correctness on single frame predictions,
-                # MSE component punishes large variations in class probabilities between consecutive samples
-                ce = self.ce(predictions, labels)
-                mse = 0.15 * torch.mean(
-                    torch.clamp(
-                        self.mse(
-                            F.log_softmax(predictions[:,:,1:], dim=1), 
-                            F.log_softmax(predictions.detach()[:,:,:-1], dim=1)),
-                        min=0,
-                        max=16))
-
-                # accumulate losses (used for backpropagation)
-                ce_loss += ce
-                mse_loss += mse
+                top1_correct += top1_cor
+                top5_correct += top5_cor
+                total += tot
 
                 # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
                 # which will then be averaged across the entire dataset size, since
@@ -282,18 +279,11 @@ class Processor:
                 ce_epoch_loss_train += (ce*N).data.item()
                 mse_epoch_loss_train += (mse*N).data.item()
 
-                # calculate the predictions statistics
-                # this only sums the number of top-1/5 correctly predicted frames, but doesn't look at prediction jitter
-                _, top5_predicted = torch.topk(predictions, k=5, dim=1)
-                top1_predicted = top5_predicted[:,0,:]
-
-                top1_cor = torch.sum(top1_predicted == labels).data.item()
-                top1_correct += top1_cor
-                top5_cor = torch.sum(top5_predicted == labels[:,None,:]).data.item()
-                top5_correct += top5_cor
-
-                tot = labels.numel()
-                total += tot
+                # accumulate losses (used for backpropagation)
+                ce_loss += ce
+                mse_loss += mse
+                # delete unnecessary computational graph references to clear space
+                del ce, mse
 
                 # zero the gradient buffers after every batch
                 # if dataset is a tensor with equal length trials, always enters
@@ -322,6 +312,7 @@ class Processor:
                     # clear the loss
                     ce_loss = 0
                     mse_loss = 0
+                    del loss
 
                     # clear the gradients
                     self.optimizer.zero_grad()
@@ -347,7 +338,8 @@ class Processor:
             # test the model on the validation set
             top1_acc_val, top5_acc_val, duration_val, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val = self.validate_(
                 dataloader=val_dataloader,
-                device=device)
+                device=device,
+                **kwargs)
 
             # record all stats of interest for logging/notification
             epoch_list.insert(0, epoch)
