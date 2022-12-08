@@ -109,7 +109,7 @@ class Stgcn(nn.Module):
 
         # input capture normalization
         # (N,C,L,V)
-        self.bn_in = nn.BatchNorm2d(kwargs['in_feat'])
+        self.bn_in = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1))
         
         # fcn for feature remapping of input to the network size
         self.fcn_in = nn.Conv2d(in_channels=kwargs['in_feat'], out_channels=kwargs['in_ch'][0][0], kernel_size=1)
@@ -155,15 +155,17 @@ class Stgcn(nn.Module):
 
 
     def forward(self, x):
-        # N, C, L, V, M = x.size()
-        # # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
-        # # this incures extra overhead
-        # x = x.permute(0, 4, 1, 2, 3).contiguous()
-        # x = x.view(N * M, C, L, V)
-        # # (N',C,L,V)
-        
-        # normalize the input frame
+        # data normalization
+        N, C, T, V = x.size()
+        # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
+        # this incures extra overhead
+        x = x.permute(0, 3, 1, 2).contiguous()
+        # (N,V,C,T)
+        x = x.view(N, V * C, T)
         x = self.bn_in(x)
+        x = x.view(N, V, C, T)
+        x = x.permute(0, 2, 3, 1)
+        # (N,C,T,V)
 
         # remap the features to the network size
         x = self.fcn_in(x)

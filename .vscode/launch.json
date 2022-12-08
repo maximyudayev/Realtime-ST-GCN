@@ -9,6 +9,8 @@
             "console": "integratedTerminal",
             "args": [
                 "train",
+                "--batch_size",
+                "1",
                 "--config",
                 "config/pku-mmd/original_local.json"
             ],
@@ -23,8 +25,8 @@
                 "train",
                 "--config",
                 "config/pku-mmd/realtime_local.json",
-                "--checkpoint",
-                "pretrained_models/pku-mmd/realtime/run_51339605/final.pt"
+                // "--checkpoint",
+                // "pretrained_models/pku-mmd/realtime/run_51339605/final.pt"
             ],
         },
         {
