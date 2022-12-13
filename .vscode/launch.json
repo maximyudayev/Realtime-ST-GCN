@@ -11,6 +11,7 @@
                 "train",
                 "--batch_size",
                 "1",
+                "--latency",
                 "--config",
                 "config/pku-mmd/original_local.json"
             ],
@@ -23,6 +24,8 @@
             "console": "integratedTerminal",
             "args": [
                 "train",
+                "--batch_size",
+                "8",
                 "--config",
                 "config/pku-mmd/realtime_local.json",
                 // "--checkpoint",
@@ -52,9 +55,23 @@
             "args": [
                 "test",
                 "--checkpoint",
-                "pretrained_models/pku-mmd/original/run_51296801/epoch-98.pt",
+                "pretrained_models/pku-mmd/proposed/run_51296801/epoch-98.pt",
                 "--config",
                 "config/pku-mmd/realtime_local.json"
+            ],
+        },
+        {
+            "name": "Test Original",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "test",
+                "--checkpoint",
+                "pretrained_models/pku-mmd/original/run_51342637/epoch-0.pt",
+                "--config",
+                "config/pku-mmd/original_local.json"
             ],
         },
         {
@@ -84,17 +101,13 @@
             ],
         },
         {
-            "name": "VSC Train Current File",
+            "name": "Debug Current File",
             "type": "python",
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
             "args": [
-                "train",
-                "--config",
-                "/data/leuven/341/vsc34153/rt-st-gcn/config/kinetics/realtime_vsc.json",
-                "--checkpoint",
-                "/scratch/leuven/341/vsc34153/rt_st_gcn/pretrained_models/kinetics/realtime/split_realtime_0/epoch-9.pt"
+                "data/pku-mmd/val/features"
             ]
         }
     ]

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.utils.graph import Graph
+from torch.utils.checkpoint import checkpoint
 
 class Stgcn(nn.Module):
     """Spatial temporal graph convolutional network of Yan, et al. (2018), adapted for realtime.
@@ -173,7 +174,7 @@ class Stgcn(nn.Module):
         # feed the frame into the ST-GCN block
         for st_gcn, importance in zip(self.st_gcn, self.edge_importance):
             # adjacency matrix is a 3D tensor (size depends on the partition strategy)
-            x = st_gcn(x, torch.mul(self.A, importance))
+            x = checkpoint(st_gcn, x, self.A * importance)
 
         # pool the output frame for a single feature vector
         x = self.avg_pool(x)
@@ -507,14 +508,16 @@ class StgcnLayer(nn.Module):
 
 
     def forward(self, x, A):
+        # TODO: replace with unfold -> fold calls
         # lower triangle matrix for temporal accumulation that mimics FIFO behavior
         capture_length = x.size(2)
-        lt_matrix = torch.zeros(capture_length, capture_length, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
+        device = torch.device("cuda:{0}".format(torch.cuda.current_device()) if torch.cuda.is_available() else "cpu")
+        lt_matrix = torch.zeros(capture_length, capture_length, device=device)
         for i in range(self.kernel_size//self.stride):
             lt_matrix += F.pad(
                 torch.eye(
                     capture_length - self.stride * i,
-                    device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu")),
+                    device=device),
                 (i*self.stride,0,0,i*self.stride))
         # must register matrix as a buffer to automatically move to GPU with model.to_device()
         # for PyTorch v1.0.1

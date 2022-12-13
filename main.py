@@ -184,23 +184,19 @@ def test(args):
     # perform common setup around the model's black box
     args.graph, actions, device, val_dataloader, _, save_dir = common(args)
     args.num_classes = len(actions)
-    
-    # split between the subjects in the captures
-    data, _ = next(iter(val_dataloader))
-    args.capture_length = data.shape[2]
 
     # construct the target model using the CLI arguments
     model = build_model(args)
-    model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
+    # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
     # load the checkpoint if not trained from scratch
-    # if args.checkpoint:
-    #     model.load_state_dict({
-    #         k.split('module.')[1]: v 
-    #         for k, v in
-    #         torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+    if args.checkpoint:
+        model.load_state_dict({
+            k.split('module.')[1]: v 
+            for k, v in
+            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
     # construct a processing wrapper
-    trainer = Processor(model, args.num_classes)
+    trainer = Processor(model, args.num_classes, val_dataloader, device)
 
     start_time = time.time()
 
@@ -294,6 +290,7 @@ if __name__ == '__main__':
             \r\t[--stages STAGES]
             \r\t[--buffer BUFFER]
             \r\t[--kernel [KERNEL]]
+            \r\t[--segment [SEGMENT]]
             \r\t[--importance]
             \r\t[--latency]
             \r\t[--receptive_field FIELD]
@@ -377,6 +374,14 @@ if __name__ == '__main__':
         nargs='+',
         metavar='',
         help='list of temporal kernel sizes (Gamma) per stage (default: [9])')
+    parser_train_model.add_argument(
+        '--segment',
+        type=int,
+        metavar='',
+        help='size of overlapping segments of frames to divide a trial into for '
+            'parallelizing computation (creates a new batch dimension). '
+            'Currently only supports datasets with different length trials. '
+            'Applied only when --model != original and --dataset_type=dir (default: 100)')
     parser_train_model.add_argument(
         '--importance',
         default=True,

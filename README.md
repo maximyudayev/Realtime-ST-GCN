@@ -269,6 +269,8 @@ This checks out with manual counting:
    1. \#parameters: 806'074
    2. \#MACs: 14.65 M/frame -> 4.4 G (does not account for some extra multiplications with edge importance matrices and BN on residual branches of dimension-matching resnet blocks)
 
+Models use `torch.utils.checkpoint.checkpoint` to trade compute for memory to increase the training batch size for long sequence data, which does not fit on GPUs otherwise. The checkpoints are placed at each ST-GCN layer.
+
 ## Citation
 Please cite the following paper if you use this repository in your reseach.
 ```

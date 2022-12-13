@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.utils.tgcn import ConvTemporalGraphical
 from models.utils.graph import Graph
+from torch.utils.checkpoint import checkpoint
 
 
 class Model(nn.Module):
@@ -87,7 +88,7 @@ class Model(nn.Module):
 
         # forward
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            x, _ = gcn(x, self.A * importance)
+            x = checkpoint(gcn, x, self.A * importance)
 
         # global pooling
         x = F.avg_pool2d(x, (1, x.size()[-1]))
@@ -118,7 +119,7 @@ class Model(nn.Module):
 
         # forward
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            x, _ = gcn(x, self.A * importance)
+            x = checkpoint(gcn, x, self.A * importance)
 
         # global pooling
         x = F.avg_pool2d(x, (1, x.size()[-1]))
@@ -207,9 +208,9 @@ class st_gcn(nn.Module):
     def forward(self, x, A):
         res = self.residual(x)
         # graph convolution
-        x, A = self.gcn(x, A)
+        x = self.gcn(x, A)
         # temporal accumulation (but using a learnable kernel)
         x = self.tcn(x)
 
-        return self.relu(x + res), A
+        return self.relu(x + res)
         

@@ -40,6 +40,7 @@ a = torch.tensor(range(N*C*P*L*V), dtype=torch.int64)
 a = torch.reshape(a,(N,C*P,L,V))
 
 # Prepare tensor for multiplication with adjacency matrices
+# TODO: try replacing split->stack-permute with unfold->permute
 b = torch.split(a,C,dim=1)
 c = torch.stack(b,-1)
 d = torch.permute(c,(0,2,4,1,3))

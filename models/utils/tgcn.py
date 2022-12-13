@@ -1,5 +1,3 @@
-# The based unit of graph convolutional networks.
-
 import torch
 import torch.nn as nn
 
@@ -66,7 +64,7 @@ class ConvTemporalGraphical(nn.Module):
         n, kc, t, v = x.size()
         x = x.view(n, A.size(0), kc//A.size(0), t, v)
         # x = torch.einsum('nkctv,kvw->nctw', (x, A))
-        # !equivalent to:
+        # equivalent to:
         x = x.permute(0, 2, 3, 1, 4).contiguous()
         n, c, t, k, v = x.size()
         k, v, w = A.size()
@@ -75,5 +73,5 @@ class ConvTemporalGraphical(nn.Module):
         x = torch.mm(x, A)
         x = x.view(n, c, t, w)
 
-        return x.contiguous(), A
+        return x.contiguous()
         

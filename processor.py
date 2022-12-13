@@ -5,7 +5,6 @@ from torch import optim
 import pandas as pd
 import time
 import os
-import torch.utils.checkpoint as chkpt
 from torch.autograd import Variable
 
 class Processor:
@@ -68,18 +67,41 @@ class Processor:
         labels,
         device,
         **kwargs):
+        """Does the forward pass on the model.
+        
+        If `dataset_type` is `'dir'`, processes 1 trial at a time, chops each sequence 
+        into equal segments that are split across available executors (GPUs) for parallel computation.
+        
+        If `model` is `'original'` and `latency` is `True`, applies the original classification model
+        on non-overlapping windows of size `receptive_field` over the input stream, producing outputs at a 
+        reduced temporal resolution inversely proportional to the size of the window. Trades prediction
+        resolution for compute (does not compute redundant values for input frames otherwise overlapped by 
+        multiple windows).
+        """
 
-        N, _, _, _ = captures.size()
         # move both data to the compute device
         # (captures is a batch of full-length captures, label is a batch of ground truths)
         captures, labels = captures.to(device), labels.to(device)
 
-        if kwargs['dataset_type'] == 'dir' and kwargs['model'] == 'original':
-            # zero pad the input across time from start by the receptive field size
-            # TODO: adjust the evaluation metric to account for the non-overlapping window case
-            captures = F.pad(captures, (0,0,kwargs['receptive_field']-1,0))
-            stride = kwargs['receptive_field'] if kwargs['latency'] else 1
-            captures = captures.unfold(2, kwargs['receptive_field'], stride)
+        N, _, L, _ = captures.size()
+
+        # Splits trial into overlapping subsequences of samples
+        if kwargs['dataset_type'] == 'dir': 
+            if kwargs['model'] == 'original':
+                # zero pad the input across time from start by the receptive field size
+                captures = F.pad(captures, (0, 0, kwargs['receptive_field']-1, 0))
+                stride = kwargs['receptive_field'] if kwargs['latency'] else 1
+                captures = captures.unfold(2, kwargs['receptive_field'], stride)
+                labels = labels[:, ::stride]
+            else:
+                # Size to divide the trial into to construct a data parallel batch
+                # TODO: adjust if kernel is different in multi-stage ST-GCN
+                P = kwargs['segment']-(kwargs['kernel'][0]-1)-(L-kwargs['segment'])%(kwargs['segment']-(kwargs['kernel'][0]-1))
+                # Pad the end of the sequence to use all of the available readings (masks actual outputs later)
+                # TODO: if captures is perfectly unfolded without padding, below call will create a slice of all 0's. Put a conditional to prevent that.
+                captures = F.pad(captures, (0, 0, 0, P))
+                captures = captures.unfold(2, kwargs['segment'], kwargs['segment']-(kwargs['kernel'][0]-1))
+            
             N, C, N_new, V, T_new = captures.size()
             # (N,C,N',V,T') -> batches of unfolded slices
             captures = captures.permute(0, 2, 1, 4, 3).contiguous()
@@ -88,14 +110,32 @@ class Processor:
 
         # make predictions and compute the loss
         # forward pass the minibatch through the model for the corresponding subject
-        # the input tensor has shape (N, C, L, V): N-batch, C-channels, L-length, V-nodes
-        # the output tensor has shape (N, C, L)
-        predictions = chkpt.checkpoint(self.model, Variable(captures, requires_grad=True))
+        # the input tensor has shape (N, V, C, L): N-batch, V-nodes, C-channels, L-length
+        # the output tensor has shape (N, C', L)
+        predictions = self.model(Variable(captures, requires_grad=True))
 
-        if kwargs['dataset_type'] == 'dir' and kwargs['model'] == 'original':
-            # arrange tensor back into a time series
-            predictions = predictions.view(N, N_new, predictions.size(1))
-            predictions = predictions.permute(0, 2, 1)
+        if kwargs['dataset_type'] == 'dir':
+            C_new = predictions.size(1)
+            if kwargs['model'] == 'original':
+                # arrange tensor back into a time series
+                predictions = predictions.view(N, N_new, C_new)
+                predictions = predictions.permute(0, 2, 1)
+            else:
+                # clone the tensor from the unfolded view to avoid overwriting underlying data that is viewed in multiple slices
+                predictions = torch.clone(predictions)
+                # clear the overlapping Gamma-1 predictions at the start of each segment (except the very first segment), since 
+                # overlapped regions are added when folding the tensor
+                predictions[1:,:,:kwargs['kernel'][0]-1] = 0
+                # shuffle data around for the correct contiguous access by the fold()
+                predictions = predictions[None].permute(0, 2, 3, 1).contiguous()
+                predictions = predictions.view(N, C_new * kwargs['segment'], -1)
+                # fold segments of the original trial computed in parallel on multiple executors back into original length sequence
+                # and drop the end padding used to fill tensor to equal row-column size
+                predictions = F.fold(
+                    predictions, 
+                    output_size=(1, L+P), 
+                    kernel_size=(1, kwargs['segment']), 
+                    stride=(1, kwargs['segment']-(kwargs['kernel'][0]-1)))[:,:,0,:L]
 
         # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
         # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
@@ -103,6 +143,8 @@ class Processor:
         # CE guides model toward absolute correctness on single frame predictions,
         # MSE component punishes large variations in class probabilities between consecutive samples
         ce = self.ce(predictions, labels)
+        # In the reduced temporal resolution setting of the original model, MSE loss is expected to be large the higher
+        # the receptive field since after that many frames a human could start performing a drastically diferent action
         mse = 0.15 * torch.mean(
             torch.clamp(
                 self.mse(
@@ -128,7 +170,7 @@ class Processor:
         dataloader,
         device,
         **kwargs):
-        """Routine for model validation.
+        """Does a forward pass without recording gradients. 
 
         Shared between train and test scripts: train invokes it after each epoch trained,
         test invokes it once for inference only.
@@ -150,13 +192,16 @@ class Processor:
 
             # sweep through the training dataset in minibatches
             for captures, labels in dataloader:
-                N, _, L, _ = captures.size()
                 top1_predicted, _, top1_cor, top5_cor, tot, ce, mse = self.forward_(captures, labels, device, **kwargs)
 
                 top1_correct += top1_cor
                 top5_correct += top5_cor
                 total += tot
 
+                stride = kwargs['receptive_field'] if kwargs['latency'] else 1
+                labels = labels[:, ::stride]
+                N, L = labels.size()
+                
                 # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
                 # which will then be averaged across the entire dataset size, since
                 # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
@@ -336,6 +381,9 @@ class Processor:
             self.model.eval()
 
             # test the model on the validation set
+            # will complain on CUDA devices that input gradients are none: irrelevant because it is a side effect of
+            # the shared `forward_()` routine for both tasks, where the model is set to `train()` or `eval()` in the
+            # corresponding caller function
             top1_acc_val, top5_acc_val, duration_val, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val = self.validate_(
                 dataloader=val_dataloader,
                 device=device,
@@ -459,7 +507,8 @@ class Processor:
         # test the model on the validation set
         top1_acc_val, top5_acc_val, duration_val, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val = self.validate_(
             dataloader=dataloader,
-            device=device)
+            device=device,
+            **kwargs)
         
         # save confusion matrix as a CSV file
         pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion_matrix.csv'.format(save_dir))
