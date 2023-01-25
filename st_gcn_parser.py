@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 
 
 class Parser(argparse.ArgumentParser):
@@ -53,6 +54,11 @@ class Parser(argparse.ArgumentParser):
             if getattr(cli_args, k, None) is None:
                 setattr(cli_args, k, v)
         
+        # ensure
+        if ((cli_args.model == 'realtime' or cli_args.model == 'adapted') and
+            cli_args.dataset_type == 'dir' and
+            cli_args.kernel[0] >= cli_args.segment):
+            cli_args.segment = math.ceil(cli_args.kernel[0] / cli_args.segment) * cli_args.segment * 2
         return cli_args
 
 

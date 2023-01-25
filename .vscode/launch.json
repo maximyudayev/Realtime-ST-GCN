@@ -17,7 +17,21 @@
             ],
         },
         {
-            "name": "Train Proposed",
+            "name": "Train Adapted",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "train",
+                "--checkpoint",
+                "pretrained_models/pku-mmd/adapted/run_51339647/final.pt",
+                "--config",
+                "config/pku-mmd/adapted_local.json",
+            ],
+        },
+        {
+            "name": "Train Realtime",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
@@ -26,38 +40,10 @@
                 "train",
                 "--batch_size",
                 "8",
-                "--config",
-                "config/pku-mmd/realtime_local.json",
                 // "--checkpoint",
                 // "pretrained_models/pku-mmd/realtime/run_51339605/final.pt"
-            ],
-        },
-        {
-            "name": "Train Adapted",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                "train",
                 "--config",
-                "config/pku-mmd/adapted_local.json",
-                "--checkpoint",
-                "pretrained_models/pku-mmd/adapted/run_51339647/final.pt"
-            ],
-        },
-        {
-            "name": "Test Proposed",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                "test",
-                "--checkpoint",
-                "pretrained_models/pku-mmd/proposed/run_51296801/epoch-98.pt",
-                "--config",
-                "config/pku-mmd/realtime_local.json"
+                "config/pku-mmd/realtime_local.json",
             ],
         },
         {
@@ -68,36 +54,84 @@
             "console": "integratedTerminal",
             "args": [
                 "test",
-                "--checkpoint",
-                "pretrained_models/pku-mmd/original/run_51342637/epoch-0.pt",
+                // "--kernel",
+                // "159",
+                // "--checkpoint",
+                // "pretrained_models/pku-mmd/original/run_51342637/epoch-0.pt",
                 "--config",
                 "config/pku-mmd/original_local.json"
             ],
         },
         {
-            "name": "Train Original Resume",
+            "name": "Test Adapted",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
-                "train",
+                // "test",
+                // "--checkpoint",
+                // "pretrained_models/pku-mmd/adapted/run_225/epoch-8.pt",
                 "--config",
-                "config/kinetics/original_local.json",
-                "--checkpoint",
-                "pretrained_models/kinetics/original/epoch-9.pt"
+                "config/pku-mmd/adapted_local.json"
             ],
         },
         {
-            "name": "Train Proposed Resume",
+            "name": "Test Realtime",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
+                "test",
+                "--kernel",
+                "159",
+                // "--checkpoint",
+                // "pretrained_models/pku-mmd/proposed/run_51296801/epoch-98.pt",
+                "--config",
+                "config/pku-mmd/realtime_local.json"
+            ],
+        },
+        {
+            "name": "VSC: Train Realtime",
+            "type": "python",
+            "request": "launch",
+            "preLaunchTask": "Load Modules",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
                 "train",
-                "--checkpoint",
-                "pretrained_models/kinetics/realtime/split_realtime_0/epoch-9.pt"
+                "--epochs",
+                "20",
+                "--batch_size",
+                "32",
+                "--data",
+                "/scratch/leuven/341/vsc34153/rt_st_gcn/data/pku-mmd-xsubject",
+                "--out",
+                "/scratch/leuven/341/vsc34153/rt_st_gcn/pretrained_models/pku-mmd-xsubject",
+                "--config",
+                "/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json"
+            ],
+        },
+        {
+            "name": "VSC: Train Proposed",
+            "type": "python",
+            "request": "launch",
+            "preLaunchTask": "Load Modules",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "train",
+                "--epochs",
+                "20", 
+                "--batch_size", 
+                "32", 
+                "--data", 
+                "/scratch/leuven/341/vsc34153/rt_st_gcn/data/pku-mmd-xsubject", 
+                "--out", 
+                "/scratch/leuven/341/vsc34153/rt_st_gcn/pretrained_models/pku-mmd-xsubject", 
+                "--config",
+                "/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json"
             ],
         },
         {

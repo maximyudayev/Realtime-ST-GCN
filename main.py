@@ -12,6 +12,7 @@ import sys
 import random
 import time
 import json
+from datetime import datetime
 
 
 def common(args):
@@ -68,20 +69,21 @@ def common(args):
     for i, action in enumerate(actions):
         actions_dict[i+1] = action
 
+    jobname = [args.command, str(args.kernel[0])]
+    if args.command == 'train':
+        jobname += [str(args.batch_size), str(args.epochs)]
+
     # prepare a directory to store results
-    if not os.getenv('PBS_JOBID'):
-        with open('.vscode/pbs_jobid.txt', 'r+') as f:
-            job_id = f.readline()
-            os.environ['PBS_JOBID'] = job_id
-            f.seek(0)
-            f.write(str(int(job_id)+1))
-            f.truncate()
-    
-    save_dir = "{0}/{1}/run_{2}".format(args.out, args.model, os.getenv('PBS_JOBID').split('.')[0])
+    save_dir = "{0}/{1}/{2}_{3}".format(
+        args.out, 
+        args.model + '_red' if args.model == 'original' and args.latency else '', 
+        '_'.join(jobname),
+        datetime.now().strftime('%d-%m-%y_%H:%M:%S'))
+
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    return graph, actions_dict, device, train_dataloader, val_dataloader, save_dir
+    return graph, actions_dict, device, train_dataloader, val_dataloader, save_dir, jobname
 
 
 def build_model(args):
@@ -132,7 +134,7 @@ def train(args):
     """
 
     # perform common setup around the model's black box
-    args.graph, actions, device, train_dataloader, val_dataloader, save_dir = common(args)
+    args.graph, actions, device, train_dataloader, val_dataloader, save_dir, args.jobname = common(args)
     args.num_classes = len(actions)
 
     # construct the target model using the CLI arguments
@@ -165,9 +167,9 @@ def train(args):
     print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
     
     os.system(
-        'mail -s "[{0}]: $PBS_JOBNAME - COMPLETED" {1} <<< ""'
+        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
         .format(
-            os.getenv('PBS_JOBID').split('.')[0],
+            '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
             args.email))
 
     return
@@ -182,7 +184,7 @@ def test(args):
     """
 
     # perform common setup around the model's black box
-    args.graph, actions, device, val_dataloader, _, save_dir = common(args)
+    args.graph, actions, device, val_dataloader, _, save_dir, args.jobname = common(args)
     args.num_classes = len(actions)
 
     # construct the target model using the CLI arguments
@@ -209,9 +211,9 @@ def test(args):
     print("Testing completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
     
     os.system(
-        'mail -s "[{0}]: $PBS_JOBNAME - COMPLETED" {1} <<< ""'
+        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
         .format(
-            os.getenv('PBS_JOBID').split('.')[0], 
+            '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
             args.email))
 
     return
@@ -228,7 +230,7 @@ def benchmark(args):
     """
 
     # perform common setup around the model's black box
-    args.graph, actions, device, _, val_dataloader, save_dir = common(args)
+    args.graph, actions, device, _, val_dataloader, save_dir, args.jobname = common(args)
     args.num_classes = len(actions)
     
     # split between the subjects in the captures
@@ -261,9 +263,9 @@ def benchmark(args):
     print("Benchmarking completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
     
     os.system(
-        'mail -s "[{0}]: $PBS_JOBNAME - COMPLETED" {1} <<< ""'
+        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
         .format(
-            os.getenv('PBS_JOBID').split('.')[0],
+            '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
             args.email))
 
     return
@@ -271,12 +273,16 @@ def benchmark(args):
 
 if __name__ == '__main__':
     # top-level custom CLI parser
+    # TODO: add `required` parameters to sub-parsers, where needed
     parser = st_gcn_parser.Parser(
         prog='main',
         description='Script for human action segmentation processing using ST-GCN networks.',
         epilog='TODO: add the epilog')
     
-    subparsers= parser.add_subparsers(metavar='command')
+    subparsers= parser.add_subparsers(
+        title='commands', 
+        dest='command',
+        required=True)
         
     # train command parser (must manually update usage after changes 
     # to the argument list or provide a custom formatter)
@@ -290,7 +296,7 @@ if __name__ == '__main__':
             \r\t[--stages STAGES]
             \r\t[--buffer BUFFER]
             \r\t[--kernel [KERNEL]]
-            \r\t[--segment [SEGMENT]]
+            \r\t[--segment SEGMENT]
             \r\t[--importance]
             \r\t[--latency]
             \r\t[--receptive_field FIELD]
@@ -337,11 +343,11 @@ if __name__ == '__main__':
     parser_train_model.add_argument(
         '--config',
         type=str,
-        default='config/kinetics/realtime_local.json',
+        default='config/pku-mmd/realtime_local.json',
         metavar='',
         help='path to the NN config file. Must be the last argument if combined '
             'with other CLI arguments. Provides default values for all arguments, except --log '
-            '(default: config/kinetics/realtime_local.json)')
+            '(default: config/pku-mmd/realtime_local.json)')
     parser_train_model.add_argument(
         '--model',
         choices=['realtime','buffer_realtime','batch','original'],
@@ -392,14 +398,15 @@ if __name__ == '__main__':
         '--latency',
         default=False,
         action='store_true',
-        help='flag specifying whether ST-GCN layers have half-buffer latency, '
-            'or non-overlapping window when --model=original (default: False)')
+        help='flag specifying whether ST-GCN layers have half-buffer latency when --model!=original, '
+            'or non-overlapping receptive field window when --model=original (default: False)')
     parser_train_model.add_argument(
         '--receptive_field',
         type=int,
         metavar='',
         help='number of frames in a sliding window across raw inputs. '
-            'Applied only when --model=original (default: 50)')
+            'Applied only when --model=original. Should be selected proportionate to '
+            'the kernel size to avoid operations with mostly zeroes (default: 50)')
     parser_train_model.add_argument(
         '--layers',
         type=int,
@@ -494,7 +501,7 @@ if __name__ == '__main__':
     parser_train_io.add_argument(
         '--data',
         metavar='',
-        help='path to the dataset directory (default: data/kinetics)')
+        help='path to the dataset directory (default: data/pku-mmd)')
     parser_train_io.add_argument(
         '--dataset_type',
         metavar='',
@@ -502,11 +509,11 @@ if __name__ == '__main__':
     parser_train_io.add_argument(
         '--actions',
         metavar='',
-        help='path to the action classes file (default: data/kinetics/actions.txt)')
+        help='path to the action classes file (default: data/pku-mmd/actions.txt)')
     parser_train_io.add_argument(
         '--out',
         metavar='',
-        help='path to the output directory (default: pretrained_models/kinetics)')
+        help='path to the output directory (default: pretrained_models/pku-mmd)')
     parser_train_io.add_argument(
         '--checkpoint',
         type=str,
@@ -545,8 +552,10 @@ if __name__ == '__main__':
             \r\t[--stages STAGES]
             \r\t[--buffer BUFFER]
             \r\t[--kernel [KERNEL]]
+            \r\t[--segment SEGMENT]
             \r\t[--importance]
             \r\t[--latency]
+            \r\t[--receptive_field FIELD]
             \r\t[--layers [LAYERS]]
             \r\t[--in_ch [IN_CH,[...]]]
             \r\t[--out_ch [OUT_CH,[...]]]
@@ -580,11 +589,11 @@ if __name__ == '__main__':
     parser_test_model.add_argument(
         '--config',
         type=str,
-        default='config/kinetics/realtime_local.json',
+        default='config/pku-mmd/realtime_local.json',
         metavar='',
         help='path to the NN config file. Must be the last argument if combined '
             'with other CLI arguments. Provides default values for all arguments, except --log '
-            '(default: config/kinetics/realtime_local.json)')
+            '(default: config/pku-mmd/realtime_local.json)')
     parser_test_model.add_argument(
         '--model',
         choices=['realtime','buffer_realtime','batch','original'],
@@ -618,6 +627,14 @@ if __name__ == '__main__':
         metavar='',
         help='list of temporal kernel sizes (Gamma) per stage (default: [9])')
     parser_test_model.add_argument(
+        '--segment',
+        type=int,
+        metavar='',
+        help='size of overlapping segments of frames to divide a trial into for '
+            'parallelizing computation (creates a new batch dimension). '
+            'Currently only supports datasets with different length trials. '
+            'Applied only when --model != original and --dataset_type=dir (default: 100)')
+    parser_test_model.add_argument(
         '--importance',
         default=True,
         action='store_true',
@@ -627,8 +644,15 @@ if __name__ == '__main__':
         '--latency',
         default=False,
         action='store_true',
-        help='flag specifying whether ST-GCN layers have half-buffer latency '
-            '(default: False)')
+        help='flag specifying whether ST-GCN layers have half-buffer latency when --model!=original, '
+            'or non-overlapping receptive field window when --model=original (default: False)')
+    parser_test_model.add_argument(
+        '--receptive_field',
+        type=int,
+        metavar='',
+        help='number of frames in a sliding window across raw inputs. '
+            'Applied only when --model=original. Should be selected proportionate to '
+            'the kernel size to avoid operations with mostly zeroes (default: 50)')
     parser_test_model.add_argument(
         '--layers',
         type=int,
@@ -690,7 +714,7 @@ if __name__ == '__main__':
     parser_test_io.add_argument(
         '--data',
         metavar='',
-        help='path to the dataset directory (default: data/kinetics)')
+        help='path to the dataset directory (default: data/pku-mmd)')
     parser_test_io.add_argument(
         '--dataset_type',
         metavar='',
@@ -698,11 +722,11 @@ if __name__ == '__main__':
     parser_test_io.add_argument(
         '--actions',
         metavar='',
-        help='path to the action classes file (default: data/kinetics/actions.txt)')
+        help='path to the action classes file (default: data/pku-mmd/actions.txt)')
     parser_test_io.add_argument(
         '--out',
         metavar='',
-        help='path to the output directory (default: pretrained_models/kinetics)')
+        help='path to the output directory (default: pretrained_models/pku-mmd)')
     parser_test_io.add_argument(
         '--checkpoint',
         type=str,

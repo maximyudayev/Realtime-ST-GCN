@@ -12,13 +12,14 @@
 # GPU partition
 # Cascadelake GPU nodes have larger memory (768GB)
 
+mail -s "[$PBS_JOBNAME]: STARTED" maxim.yudayev@kuleuven.be <<< ""
+
 # Change directory to location from which task was submitted to queue: $VSC_DATA/...
 cd $PBS_O_WORKDIR
 # Purge all existing software packages
 module purge
 
-# Load VSC optimized PyTorch with CUDA
-module load PyTorch/1.0.1-intel-2018a
+source activate rt-st-gcn
 
 (>&1 echo "$@")
 (>&1 echo 'starting computation')

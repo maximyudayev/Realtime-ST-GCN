@@ -95,24 +95,32 @@ class Processor:
                 labels = labels[:, ::stride]
             else:
                 # Size to divide the trial into to construct a data parallel batch
-                # TODO: adjust if kernel is different in multi-stage ST-GCN
-                P = kwargs['segment']-(kwargs['kernel'][0]-1)-(L-kwargs['segment'])%(kwargs['segment']-(kwargs['kernel'][0]-1))
+                # NOTE: adjust if kernel is different in multi-stage ST-GCN
+                W = kwargs['segment']-(kwargs['kernel'][0]-1)
+                # if captures is perfectly unfolded without padding, P will be 0
+                P = (W-((L-kwargs['segment'])%W))%W
                 # Pad the end of the sequence to use all of the available readings (masks actual outputs later)
-                # TODO: if captures is perfectly unfolded without padding, below call will create a slice of all 0's. Put a conditional to prevent that.
                 captures = F.pad(captures, (0, 0, 0, P))
                 captures = captures.unfold(2, kwargs['segment'], kwargs['segment']-(kwargs['kernel'][0]-1))
             
             N, C, N_new, V, T_new = captures.size()
             # (N,C,N',V,T') -> batches of unfolded slices
+            # .contiguous() is needed before .view(), but also after .unfold() to operate on same data element 
+            # in the overlapping segments. Otherwise two segments will update the same memory location, leaking data.
+            # No need to .clone() the sliced view of the tensor after .contiguous()
             captures = captures.permute(0, 2, 1, 4, 3).contiguous()
             captures = captures.view(N * N_new, C, T_new, V)
             # (N'',C,T',V)
+
+        start = time.time()
 
         # make predictions and compute the loss
         # forward pass the minibatch through the model for the corresponding subject
         # the input tensor has shape (N, V, C, L): N-batch, V-nodes, C-channels, L-length
         # the output tensor has shape (N, C', L)
         predictions = self.model(Variable(captures, requires_grad=True))
+        
+        latency = ((time.time() - start) / (N_new if kwargs['model'] == 'original' else L))
 
         if kwargs['dataset_type'] == 'dir':
             C_new = predictions.size(1)
@@ -121,8 +129,6 @@ class Processor:
                 predictions = predictions.view(N, N_new, C_new)
                 predictions = predictions.permute(0, 2, 1)
             else:
-                # clone the tensor from the unfolded view to avoid overwriting underlying data that is viewed in multiple slices
-                predictions = torch.clone(predictions)
                 # clear the overlapping Gamma-1 predictions at the start of each segment (except the very first segment), since 
                 # overlapped regions are added when folding the tensor
                 predictions[1:,:,:kwargs['kernel'][0]-1] = 0
@@ -162,7 +168,7 @@ class Processor:
         top5_cor = torch.sum(top5_predicted == labels[:,None,:]).data.item()
         tot = labels.numel()
 
-        return top1_predicted, top5_predicted, top1_cor, top5_cor, tot, ce, mse
+        return top1_predicted, top5_predicted, top1_cor, top5_cor, tot, ce, mse, latency
 
 
     def validate_(
@@ -190,16 +196,21 @@ class Processor:
             ce_epoch_loss_val = 0
             mse_epoch_loss_val = 0
 
+            latency = 0
+
             # sweep through the training dataset in minibatches
-            for captures, labels in dataloader:
-                top1_predicted, _, top1_cor, top5_cor, tot, ce, mse = self.forward_(captures, labels, device, **kwargs)
+            for i, (captures, labels) in enumerate(dataloader):
+                top1_predicted, _, top1_cor, top5_cor, tot, ce, mse, lat = self.forward_(captures, labels, device, **kwargs)
 
                 top1_correct += top1_cor
                 top5_correct += top5_cor
                 total += tot
+                latency += lat
 
-                stride = kwargs['receptive_field'] if kwargs['latency'] else 1
-                labels = labels[:, ::stride]
+                # to calculate loss correctly, account for non-overlapping original model with reduced temporal resolution
+                if kwargs['model'] == 'original':
+                    labels = labels[:, ::kwargs['receptive_field'] if kwargs['latency'] else 1]
+                
                 N, L = labels.size()
                 
                 # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
@@ -229,7 +240,7 @@ class Processor:
             top5_acc = top5_correct / total
             duration = test_end_time - test_start_time
 
-        return top1_acc, top5_acc, duration, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val
+        return top1_acc, top5_acc, duration, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val, latency/i
 
 
     def train(
@@ -311,7 +322,7 @@ class Processor:
             for i, (captures, labels) in enumerate(train_dataloader):
                 N, _, _, _ = captures.size()
 
-                _, _, top1_cor, top5_cor, tot, ce, mse = self.forward_(captures, labels, device, **kwargs)
+                _, _, top1_cor, top5_cor, tot, ce, mse, _ = self.forward_(captures, labels, device, **kwargs)
 
                 top1_correct += top1_cor
                 top5_correct += top5_cor
@@ -384,7 +395,7 @@ class Processor:
             # will complain on CUDA devices that input gradients are none: irrelevant because it is a side effect of
             # the shared `forward_()` routine for both tasks, where the model is set to `train()` or `eval()` in the
             # corresponding caller function
-            top1_acc_val, top5_acc_val, duration_val, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val = self.validate_(
+            top1_acc_val, top5_acc_val, duration_val, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val, _ = self.validate_(
                 dataloader=val_dataloader,
                 device=device,
                 **kwargs)
@@ -412,7 +423,7 @@ class Processor:
 
             # log and send notifications
             print(
-                "[epoch {0}]: epoch loss = {1}, top1_acc_train = {2}, top5_acc_train = {3}, top1_acc_val = {4}, top5_acc_val = {5}"
+                "[epoch {0}]: epoch_loss = {1}, top1_acc_train = {2}, top5_acc_train = {3}, top1_acc_val = {4}, top5_acc_val = {5}"
                 .format(
                     epoch, 
                     (ce_epoch_loss_train + mse_epoch_loss_train) / len(train_dataloader),
@@ -440,7 +451,7 @@ class Processor:
                     'format=" %-03d %4.6f %1.4f %1.4f %1.4f %1.4f %5.6f %5.6f\n";'
                     'printf "$header" "EPOCH" "LOSS" "TOP1_TRAIN" "TOP5_TRAIN" "TOP1_VAL" "TOP5_VAL" "TIME_TRAIN" "TIME_VAL" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
                     'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
-                    'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: $PBS_JOBNAME status update" {2}'
+                    'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: status update" {2}'
                     .format(
                         ' '.join([
                             ' '.join([str(e) for e in t]) for t 
@@ -453,7 +464,7 @@ class Processor:
                                 top5_acc_val_list,
                                 duration_train_list,
                                 duration_val_list)]),
-                        os.getenv('PBS_JOBID').split('.')[0],
+                        '_'.join([kwargs['model'], 'red' if kwargs['model'] == 'original' and kwargs['latency'] else '', *kwargs['jobname']]),
                         kwargs['email']))
 
             # save (update) train-validation curve as a CSV file after each epoch
@@ -505,7 +516,7 @@ class Processor:
         self.model.to(device)
 
         # test the model on the validation set
-        top1_acc_val, top5_acc_val, duration_val, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val = self.validate_(
+        top1_acc_val, top5_acc_val, duration_val, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val, latency = self.validate_(
             dataloader=dataloader,
             device=device,
             **kwargs)
@@ -515,10 +526,17 @@ class Processor:
 
         # log and send notifications
         print(
-            "[test]: top1_acc = {0}, top5_acc = {1}"
-            .format( 
+            "[test]: epoch_loss = {0}, top1_acc = {1}, top5_acc = {2}"
+            .format(
+                (ce_epoch_loss_val + mse_epoch_loss_val) / len(dataloader),
                 top1_acc_val,
                 top5_acc_val),
+            flush=True,
+            file=kwargs['log'][0])
+
+        print(
+            "[test]: {0} spf"
+            .format(latency),
             flush=True,
             file=kwargs['log'][0])
         
@@ -536,7 +554,7 @@ class Processor:
                 'format=" %-1.4f %1.4f %5.6f\n";'
                 'printf "$header" "TOP1" "TOP5" "TIME" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
                 'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
-                'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: $PBS_JOBNAME status update" {2}'
+                'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: status update" {2}'
                 .format(
                     ' '.join([
                         ' '.join([str(e) for e in t]) for t 
@@ -544,6 +562,6 @@ class Processor:
                             top1_acc_val,
                             top5_acc_val,
                             duration_val)]),
-                    os.getenv('PBS_JOBID').split('.')[0],
+                    '_'.join([kwargs['model'], 'red' if kwargs['model'] == 'original' and kwargs['latency'] else '', *kwargs['jobname']]),
                     kwargs['email']))
         return

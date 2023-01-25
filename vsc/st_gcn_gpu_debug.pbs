@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -A lp_stadius_fpga_ai
-#PBS -l nodes=1:ppn=9:gpus=1:skylake
+#PBS -l nodes=1:ppn=36:gpus=4:skylake
 #PBS -l partition=gpu
 #PBS -l pmem=5gb
 #PBS -l qos=debugging
@@ -9,19 +9,20 @@
 #PBS -m bae
 #PBS -M maxim.yudayev@kuleuven.be
 
-# (1/1) Debug Skylake 1x P100 GPU node (requires 9 cores per gpu)
+# (1/1) Debug Skylake 4x P100 GPU node (requires 9 cores per gpu)
 # GPU partition
 # Debug Skylake GPU node has thin node's memory (192GB)
 # Debug specifier
 # Debug jobs limited to 30 min
+
+mail -s "[$PBS_JOBNAME]: STARTED" maxim.yudayev@kuleuven.be <<< ""
 
 # Change directory to location from which task was submitted to queue: $VSC_DATA/...
 cd $PBS_O_WORKDIR
 # Purge all existing software packages
 module purge
 
-# Load VSC optimized PyTorch with CUDA
-module load PyTorch/1.0.1-intel-2018a
+source activate rt-st-gcn
 
 (>&1 echo "$@")
 (>&1 echo 'starting computation')

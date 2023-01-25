@@ -1,67 +1,26 @@
 #!/bin/bash
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt9_100 -F "--config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
+qsub -l walltime=2:00:00 -N st_gcn_pkummd_rt_9_32_20 -F "--epochs 20 --batch_size 32 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
 
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt21_100 -F "--kernel 21 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
+qsub -l walltime=3:00:00 -N st_gcn_pkummd_adapt_9_32_20 -F "--epochs 20 --batch_size 32 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/adapted_vsc.json'" st_gcn_gpu_train.pbs
 
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt69_100 -F "--kernel 69 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
+qsub -l walltime=10:00:00 -N st_gcn_pkummd_orig_9_8_20 -F "--epochs 20 --batch_size 8 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc.json'" st_gcn_gpu_train.pbs
 
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt153_100 -F "--kernel 153 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=8:00:00 -N st_gcn_pkummd_rt299_100 -F "--kernel 299 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_orig9_100 -F "--config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=9:00:00 -N st_gcn_pkummd_orig21_100 -F "--kernel 21 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=15:00:00 -N st_gcn_pkummd_orig69_100 -F "--kernel 69 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc.json'" st_gcn_gpu_train.pbs
+qsub -l walltime=3:00:00 -N st_gcn_pkummd_orig_red_9_32_20 -F "--epochs 20 --batch_size 32 --latency --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc.json'" st_gcn_gpu_train.pbs
 
 
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt9_100_do -F "--config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_do.json'" st_gcn_gpu_train.pbs
+#qsub -l walltime=2:00:00 -N st_gcn_pkummd_sub_rt9_20 -F "--epochs 20 --batch_size 32 --data '/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmd-xsubject' --out '/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmd-xsubject' --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
 
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt21_100_do -F "--kernel 21 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_do.json'" st_gcn_gpu_train.pbs
+#qsub -l walltime=3:00:00 -N st_gcn_pkummd_sub_adapt9_20 -F "--epochs 20 --batch_size 32 --data '/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmd-xsubject' --out '/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmd-xsubject' --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/adapted_vsc.json'" st_gcn_gpu_train.pbs
 
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt69_100_do -F "--kernel 69 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_do.json'" st_gcn_gpu_train.pbs
+#qsub -l walltime=10:00:00 -N st_gcn_pkummd_sub_orig9_20 -F "--epochs 20 --batch_size 8 --data '/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmd-xsubject' --out '/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmd-xsubject' --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc.json'" st_gcn_gpu_train.pbs
 
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt153_100_do -F "--kernel 153 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_do.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=8:00:00 -N st_gcn_pkummd_rt299_100_do -F "--kernel 299 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_do.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_orig9_100_do -F "--config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc_do.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=9:00:00 -N st_gcn_pkummd_orig21_100_do -F "--kernel 21 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc_do.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=15:00:00 -N st_gcn_pkummd_orig69_100_do -F "--kernel 69 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc_do.json'" st_gcn_gpu_train.pbs
+#qsub -l walltime=3:00:00 -N st_gcn_pkummd_sub_orig_red9_20 -F "--epochs 20 --batch_size 32 --latency --data '/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmd-xsubject' --out '/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmd-xsubject' --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc.json'" st_gcn_gpu_train.pbs
 
 
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt9_100_lr -F "--config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_lr.json'" st_gcn_gpu_train.pbs
+#qsub -l walltime=2:00:00 -N st_gcn_pkummd_rt21_20 -F "--kernel 21 --epochs 20 --batch_size 32 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
 
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt21_100_lr -F "--kernel 21 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_lr.json'" st_gcn_gpu_train.pbs
+#qsub -l walltime=3:00:00 -N st_gcn_pkummd_adapt21_20 -F "--kernel 21 --epochs 20 --batch_size 32 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/adapted_vsc.json'" st_gcn_gpu_train.pbs
 
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt69_100_lr -F "--kernel 69 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_lr.json'" st_gcn_gpu_train.pbs
+#qsub -l walltime=10:00:00 -N st_gcn_pkummd_orig21_20 -F "--kernel 21 --epochs 20 --batch_size 8 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc.json'" st_gcn_gpu_train.pbs
 
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt153_100_lr -F "--kernel 153 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_lr.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=8:00:00 -N st_gcn_pkummd_rt299_100_lr -F "--kernel 299 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_lr.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_orig9_100_lr -F "--config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc_lr.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=9:00:00 -N st_gcn_pkummd_orig21_100_lr -F "--kernel 21 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc_lr.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=15:00:00 -N st_gcn_pkummd_orig69_100_lr -F "--kernel 69 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc_lr.json'" st_gcn_gpu_train.pbs
-
-
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt9_100_lr_do -F "--config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_lr_do.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt21_100_lr_do -F "--kernel 21 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_lr_do.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt69_100_lr_do -F "--kernel 69 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_lr_do.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_rt153_100_lr_do -F "--kernel 153 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_lr_do.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=8:00:00 -N st_gcn_pkummd_rt299_100_lr_do -F "--kernel 299 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc_lr_do.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=6:00:00 -N st_gcn_pkummd_orig9_100_lr_do -F "--config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc_lr_do.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=9:00:00 -N st_gcn_pkummd_orig21_100_lr_do -F "--kernel 21 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc_lr_do.json'" st_gcn_gpu_train.pbs
-
-qsub -l walltime=15:00:00 -N st_gcn_pkummd_orig69_100_lr_do -F "--kernel 69 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc_lr_do.json'" st_gcn_gpu_train.pbs
+#qsub -l walltime=3:00:00 -N st_gcn_pkummd_orig_red21_20 -F "--kernel 21 --epochs 20 --batch_size 32 --latency --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/original_vsc.json'" st_gcn_gpu_train.pbs

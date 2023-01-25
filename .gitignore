@@ -7,6 +7,7 @@ debug
 data/*
 pretrained_models/*
 pretrained_models/pku-mmd/*
+.ipynb_checkpoints/
 
 # exceptions
 !data/skeletons
