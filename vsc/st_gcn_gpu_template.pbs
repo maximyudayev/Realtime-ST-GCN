@@ -5,8 +5,8 @@
 #PBS -l pmem=5gb
 #PBS -l walltime=65:00:00
 #PBS -N st_gcn_train_orig_50_epochs
-#PBS -o debug/stdout.$PBS_JOBNAME.$PBS_JOBID
-#PBS -e debug/stderr.$PBS_JOBNAME.$PBS_JOBID
+#PBS -o debug/$PBS_JOBNAME.out       
+#PBS -e debug/$PBS_JOBNAME.err
 #PBS -m bae
 #PBS -M maxim.yudayev@kuleuven.be
 

@@ -70,13 +70,15 @@ def common(args):
         actions_dict[i+1] = action
 
     jobname = [args.command, str(args.kernel[0])]
+    if args.model == 'original':
+        jobname += [str(args.receptive_field)]
     if args.command == 'train':
         jobname += [str(args.batch_size), str(args.epochs)]
 
     # prepare a directory to store results
     save_dir = "{0}/{1}/{2}_{3}".format(
         args.out, 
-        args.model + '_red' if args.model == 'original' and args.latency else '', 
+        args.model + ('_red' if args.model == 'original' and args.latency else ''), 
         '_'.join(jobname),
         datetime.now().strftime('%d-%m-%y_%H:%M:%S'))
 

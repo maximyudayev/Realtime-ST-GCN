@@ -1,19 +1,18 @@
 #!/bin/bash
 #SBATCH -A lp_stadius_fpga_ai
-#SBATCH -cluster=wice
-#SBATCH -nodes=1
-#SBATCH -ntasks=36
-#SBATCH -gpus=2
-#SBATCH -partition=gpu
-#SBATCH -mem-per-cpu=7000
-#SBATCH -o debug/stdout.$SLURM_JOB_NAME.$SLURM_JOB_ID
-#SBATCH -e debug/stderr.$SLURM_JOB_NAME.$SLURM_JOB_ID
-#SBATCH -mail-type=FAIL,BEGIN,END
-#SBATCH -mail-user=maxim.yudayev@kuleuven.be
+#SBATCH --cluster=wice
+#SBATCH --nodes=1
+#SBATCH --ntasks=72
+#SBATCH --gpus=4
+#SBATCH --partition=gpu
+#SBATCH --mem-per-cpu=7000
+
+#SBATCH --mail-type=FAIL,BEGIN,END
+#SBATCH --mail-user=maxim.yudayev@kuleuven.be
 
 # (1/4) Full Icelake x4 A100 GPU node (requires 18 cores per gpu)
 # GPU partition
-# Skylake GPU nodes have thin node's memory (192GB)
+# Icelake GPU nodes have 512GB
 
 mail -s "[$SLURM_JOB_NAME]: STARTED" maxim.yudayev@kuleuven.be <<< ""
 

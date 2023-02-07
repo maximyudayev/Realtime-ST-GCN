@@ -4,8 +4,8 @@
 #PBS -l partition=gpu
 #PBS -l pmem=5gb
 #PBS -l qos=debugging
-#PBS -o debug/stdout.$PBS_JOBNAME.$PBS_JOBID
-#PBS -e debug/stderr.$PBS_JOBNAME.$PBS_JOBID
+#PBS -o debug/$PBS_JOBNAME.out       
+#PBS -e debug/$PBS_JOBNAME.err
 #PBS -m bae
 #PBS -M maxim.yudayev@kuleuven.be
 
