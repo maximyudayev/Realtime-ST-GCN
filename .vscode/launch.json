@@ -93,6 +93,38 @@
             ],
         },
         {
+            "name": "Benchmark Original",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "benchmark",
+                // "--kernel",
+                // "159",
+                // "--checkpoint",
+                // "pretrained_models/pku-mmd/original/run_51342637/epoch-0.pt",
+                "--config",
+                "config/pku-mmd/original_local.json"
+            ],
+        },
+        {
+            "name": "Benchmark Realtime",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "benchmark",
+                "--kernel",
+                "21",
+                // "--checkpoint",
+                // "pretrained_models/pku-mmd/proposed/run_51296801/epoch-98.pt",
+                "--config",
+                "config/pku-mmd/realtime_local.json"
+            ],
+        },
+        {
             "name": "VSC: Train Realtime",
             "type": "python",
             "request": "launch",

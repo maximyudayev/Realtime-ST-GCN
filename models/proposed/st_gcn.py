@@ -185,42 +185,33 @@ class Stgcn(nn.Module):
         # removes the last dimension (node dimension) of size 1: (N,C,L,1) -> (N,C,L)
         return x.squeeze(-1)
 
-
-    # def _swap_layers_for_inference(self: nn.Module) -> nn.Module:
-        
-    #     return
-
-
-    # def train(self: nn.Module, mode: bool = True) -> nn.Module:
-    #     # TODO: 
-    #     return super().train(mode)
-
     
-    # def eval(self: nn.Module) -> nn.Module:
-    #     super().eval()
+    def _swap_layers_for_inference(self):
 
-    #     # stack of ST-GCN layers
-    #     stack = [[RtStgcnLayer(
-    #                 num_joints=self.conf['graph']['num_node'],
-    #                 fifo_latency=self.conf['latency'],
-    #                 in_channels=self.conf['in_ch'][i][j],
-    #                 out_channels=self.conf['out_ch'][i][j],
-    #                 kernel_size=self.conf['kernel'][i],
-    #                 stride=self.conf['stride'][i][j],
-    #                 num_partitions=self.A.shape[0],
-    #                 residual=not not self.conf['residual'][i][j],
-    #                 dropout=self.conf['dropout'][i][j],
-    #                 **self.conf)
-    #             for j in range(layers_in_stage)] 
-    #             for i, layers_in_stage in enumerate(self.conf['layers'])]
-    #     # flatten into a single sequence of layers after parameters were used to construct
-    #     # (done like that to make config files more readable)
-    #     new_st_gcn = nn.ModuleList([module for sublist in stack for module in sublist])
+        # stack of ST-GCN layers
+        stack = [[RtStgcnLayer(
+                    num_joints=self.conf['graph']['num_node'],
+                    fifo_latency=self.conf['latency'],
+                    in_channels=self.conf['in_ch'][i][j],
+                    out_channels=self.conf['out_ch'][i][j],
+                    kernel_size=self.conf['kernel'][i],
+                    stride=self.conf['stride'][i][j],
+                    num_partitions=self.A.shape[0],
+                    residual=not not self.conf['residual'][i][j],
+                    dropout=self.conf['dropout'][i][j])
+                for j in range(layers_in_stage)] 
+                for i, layers_in_stage in enumerate(self.conf['layers'])]
+        # flatten into a single sequence of layers after parameters were used to construct
+        # (done like that to make config files more readable)
+        new_st_gcn = nn.ModuleList([module for sublist in stack for module in sublist])
 
-    #     # TODO: copy trained weights over from batch training to the inference layers
-    #     # for self.parameters()
+        # copy parameters from the batch trained model
+        new_st_gcn.load_state_dict(self.st_gcn.state_dict())
 
-    #     return self
+        # replace the st gcn stack in the model
+        self.st_gcn = new_st_gcn
+
+        return
 
     
 class RtStgcnLayer(nn.Module):
@@ -264,8 +255,7 @@ class RtStgcnLayer(nn.Module):
         num_partitions,
         dropout,
         residual,
-        fifo_latency,
-        **kwargs):
+        fifo_latency):
         """
         Args:
             in_channels : ``int``
@@ -315,16 +305,16 @@ class RtStgcnLayer(nn.Module):
         # (out_channels is a multiple of the partition number
         # to avoid for-looping over several partitions)
         # partition-wise convolution results are basically stacked across channel-dimension
-        self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1)
+        self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1, bias=False)
 
         # FIFO for intermediate Gamma graph frames after multiplication with adjacency matrices
         # (N,G,P,C,V) - (N)batch, (G)amma, (P)artition, (C)hannels, (V)ertices
-        self.fifo = torch.zeros(kwargs['batch_size'], self.fifo_size, num_partitions, out_channels, num_joints)
+        self.fifo = torch.zeros(1, self.fifo_size, num_partitions, out_channels, num_joints)
         
         # normalization and dropout on main branch
-        self.bn_do = nn.Sequential(
+        self.bn_relu = nn.Sequential(
             nn.BatchNorm2d(out_channels),
-            nn.Dropout(dropout, inplace=True))
+            nn.ReLU())
 
         # residual branch
         if not residual:
@@ -333,11 +323,17 @@ class RtStgcnLayer(nn.Module):
             self.residual = lambda x: x
         else:
             self.residual = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1),
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
                 nn.BatchNorm2d(out_channels))
 
         # activation of branch sum
-        self.relu = nn.ReLU(inplace=True)
+        # if no resnet connection, prevent ReLU from being applied twice
+        if not residual:
+            self.do = nn.Dropout(dropout)
+        else:
+            self.do = nn.Sequential(
+                nn.ReLU(),
+                nn.Dropout(dropout))
 
 
     def forward(self, x, A):
@@ -388,10 +384,11 @@ class RtStgcnLayer(nn.Module):
         # [(N,C,V)] -> (N,C,L,V)
         h = torch.stack(outputs, 2)
 
-        # add the branches (main + residual)
-        i = h + res
+        # normalize the output of the st-gcn operation and activate
+        i = self.bn_relu(h)
 
-        return self.relu(i)
+        # add the branches (main + residual), activate and dropout
+        return self.do(i + res)
 
 
 class StgcnLayer(nn.Module):
@@ -525,10 +522,10 @@ class StgcnLayer(nn.Module):
 
         # residual branch 
         res = self.residual(x) 
-         
+
         # spatial convolution of incoming frame (node-wise) 
         x = self.conv(x) 
- 
+
         # convert to the expected dimension order and add the partition dimension 
         # reshape the tensor for multiplication with the adjacency matrix 
         # (convolution output contains all partitions, stacked across the channel dimension) 
@@ -541,18 +538,18 @@ class StgcnLayer(nn.Module):
         x = x.permute(0,2,4,1,3) 
         # single multiplication with the adjacency matrices (spatial selective addition, across partitions) 
         x = torch.matmul(x, A) 
- 
+
         # sum temporally by multiplying features with the Toeplitz matrix 
         # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L) 
-        x = x.permute(0,2,3,4,1) 
-        x = torch.matmul(x, lt_matrix) 
-        # sum across partitions (N,C,V,L) 
-        x = torch.sum(x, dim=(1)) 
+        x = x.permute(0,2,3,4,1)
+        x = torch.matmul(x, lt_matrix)
+        # sum across partitions (N,C,V,L)
+        x = torch.sum(x, dim=(1))
         # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V) 
-        x = x.permute(0,1,3,2) 
- 
-        # normalize the output of the st-gcn operation and activate 
-        x = self.bn_relu(x) 
- 
-        # add the branches (main + residual), activate and dropout 
-        return self.do(x + res) 
+        x = x.permute(0,1,3,2)
+
+        # normalize the output of the st-gcn operation and activate
+        x = self.bn_relu(x)
+
+        # add the branches (main + residual), activate and dropout
+        return self.do(x + res)
