@@ -159,9 +159,9 @@ class Processor:
 
         # calculate the predictions statistics
         # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
-        _, top5_predicted = torch.topk(predictions, k=5, dim=1)
+        top5_probs, top5_predicted = torch.topk(F.softmax(predictions, dim=1), k=5, dim=1)
         top1_predicted = top5_predicted[:,0,:]
-
+        # top5_probs[0,:,torch.bitwise_and(torch.any(top5_predicted == labels[:,None,:], dim=1), top1_predicted != labels)[0]].permute(1,0) # probabilities of classes where top-1 and top-5 don't intersect
         top1_cor = torch.sum(top1_predicted == labels).data.item()
         top5_cor = torch.sum(top5_predicted == labels[:,None,:]).data.item()
         tot = labels.numel()
@@ -258,17 +258,17 @@ class Processor:
             self.model = nn.DataParallel(self.model)
         self.model.to(device)
 
+        # setup the optimizer
+        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+
         if checkpoint:
             state = torch.load(checkpoint, map_location=device)
             range_epochs = range(state['epoch']+1, epochs)
+            
+            # load the checkpoint if not training from scratch
+            self.optimizer.load_state_dict(state['optimizer_state_dict'])
         else:
             range_epochs = range(epochs)
-
-        # setup the optimizer
-        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
-        # load the checkpoint if not training from scratch
-        if checkpoint:
-            self.optimizer.load_state_dict(state['optimizer_state_dict'])
 
         # variables for email updates
         epoch_list = []
@@ -315,7 +315,7 @@ class Processor:
 
             # sweep through the training dataset in minibatches
             for i, (captures, labels) in enumerate(train_dataloader):
-                N, _, _, _ = captures.size()
+                N, _, L, _ = captures.size()
 
                 _, _, top1_cor, top5_cor, tot, ce, mse = self.forward_(captures, labels, device, **kwargs)
 
@@ -330,11 +330,25 @@ class Processor:
                 ce_epoch_loss_train += (ce*N).data.item()
                 mse_epoch_loss_train += (mse*N).data.item()
 
-                # accumulate losses (used for backpropagation)
-                ce_loss += ce
-                mse_loss += mse
-                # delete unnecessary computational graph references to clear space
-                del ce, mse
+                # loss is already a mean across minibatch for tensor of equally long trials, but
+                # not for different-length trials -> needs averaging
+                loss = ce + mse
+                if (kwargs['dataset_type'] == 'dir' and
+                    (len(train_dataloader) % kwargs['batch_size'] == 0 or
+                    i < len(train_dataloader) - (len(train_dataloader) % kwargs['batch_size']))):
+                    
+                    # if the minibatch is the same size as requested (first till one before last minibatch)
+                    # (because dataset is a multiple of batch size or if current minibatch is of requested size)
+                    loss /= kwargs['batch_size']
+                elif (kwargs['dataset_type'] == 'dir'and 
+                    (len(train_dataloader) % kwargs['batch_size'] != 0 and
+                    i >= len(train_dataloader) - (len(train_dataloader) % kwargs['batch_size']))):
+
+                    # if the minibatch is smaller than requested (last minibatch)
+                    loss /= (len(train_dataloader) % kwargs['batch_size'])
+
+                # backward pass to compute the gradients
+                loss.backward()
 
                 # zero the gradient buffers after every batch
                 # if dataset is a tensor with equal length trials, always enters
@@ -344,26 +358,8 @@ class Processor:
                         (i + 1) == len(train_dataloader))) or
                     (kwargs['dataset_type'] == 'file')):
 
-                    # loss is already a mean across minibatch for tensor of equally long trials, but
-                    # not for different-length trials -> needs averaging
-                    loss = ce_loss + mse_loss
-                    if (kwargs['dataset_type'] == 'dir' and (i + 1) % kwargs['batch_size'] == 0):
-                        # if the minibatch is the same size as requested (first till one before last minibatch)
-                        loss /= kwargs['batch_size']
-                    elif (kwargs['dataset_type'] == 'dir' and (i + 1) == len(train_dataloader)):
-                        # if the minibatch is smaller than requested (last minibatch)
-                        loss /= ((i + 1) % kwargs['batch_size'])
-
-                    # backward pass to compute the gradients
-                    loss.backward()
-
                     # update parameters based on the computed gradients
                     self.optimizer.step()
-
-                    # clear the loss
-                    ce_loss = 0
-                    mse_loss = 0
-                    del loss
 
                     # clear the gradients
                     self.optimizer.zero_grad()
