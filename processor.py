@@ -290,6 +290,8 @@ class Processor:
             # (prepares Dropout and BatchNormalization layers to disable and to learn parameters, respectively)
             self.model.train()
 
+            confusion_matrix_train = torch.zeros(self.num_classes, self.num_classes, device=device, dtype=torch.int64)
+
             ce_epoch_loss_train = 0
             mse_epoch_loss_train = 0
 
@@ -304,12 +306,12 @@ class Processor:
             epoch_start_time = time.time()
 
             self.optimizer.zero_grad()
-
+            
             # sweep through the training dataset in minibatches
             for i, (captures, labels) in enumerate(train_dataloader):
                 N, _, L, _ = captures.size()
 
-                _, _, top1_cor, top5_cor, tot, ce, mse = self.forward_(captures, labels, device, **kwargs)
+                top1_predicted, _, top1_cor, top5_cor, tot, ce, mse = self.forward_(captures, labels, device, **kwargs)
 
                 top1_correct += top1_cor
                 top5_correct += top5_cor
@@ -356,11 +358,32 @@ class Processor:
                     # clear the gradients
                     self.optimizer.zero_grad()
 
+                # to calculate confusion matrix correctly, account for non-overlapping original model with reduced temporal resolution
+                if kwargs['model'] == 'original':
+                    labels = labels[:, ::kwargs['receptive_field'] if kwargs['latency'] else 1]
+                
+                N, L = labels.size()
+
+                # collect the correct predictions for each class and total per that class
+                # for batch_el in range(N*M):
+                for batch_el in range(N):
+                    # OHE 3D matrix, where label and prediction at time `t` are indices
+                    top1_ohe = torch.zeros(L, self.num_classes, self.num_classes, device=device, dtype=torch.bool)
+                    top1_ohe[range(L), top1_predicted[batch_el], labels[batch_el]] = True
+
+                    # sum-reduce OHE 3D matrix to get number of true vs. false classifications for each class on this sample
+                    confusion_matrix_train += torch.sum(top1_ohe, dim=0)
+
             epoch_end_time = time.time()
             duration_train = epoch_end_time - epoch_start_time
             top1_acc_train = top1_correct / total
             top5_acc_train = top5_correct / total
             
+            # save prediction and ground truth of reference sample
+            ref_capture, ref_label = train_dataloader.dataset.__getitem__(420)
+            ref_predicted, _, _, _, _, _, _ = self.forward_(ref_capture[None], ref_label[None], device, **kwargs)
+            pd.DataFrame(torch.stack((ref_label, ref_predicted[0])).cpu().numpy()).to_csv('{0}/segmentation_epoch-{1}_train.csv'.format(save_dir, epoch))
+
             # checkpoint the model during training at specified epochs
             if epoch in checkpoints:
                 torch.save({
@@ -401,8 +424,14 @@ class Processor:
             duration_train_list.insert(0, duration_train)
             duration_val_list.insert(0, duration_val)
 
+            # save prediction and ground truth of reference sample
+            ref_capture, ref_label = train_dataloader.dataset.__getitem__(420)
+            ref_predicted, _, _, _, _, _, _ = self.forward_(ref_capture[None], ref_label[None], device, **kwargs)
+            pd.DataFrame(torch.stack((ref_label, ref_predicted[0])).cpu().numpy()).to_csv('{0}/segmentation_epoch-{1}_val.csv'.format(save_dir, epoch))
+
             # save confusion matrix as a CSV file
             pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion_matrix_epoch-{1}.csv'.format(save_dir, epoch))
+            pd.DataFrame(confusion_matrix_train.cpu().numpy()).to_csv('{0}/confusion_matrix_epoch-{1}_train.csv'.format(save_dir, epoch))
 
             # log and send notifications
             print(
