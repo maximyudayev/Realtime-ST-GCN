@@ -188,8 +188,7 @@ class Processor:
 
             test_start_time = time.time()
 
-            confusion_matrix = torch.zeros(self.num_classes, self.num_classes, device=device)
-            total_per_class = torch.zeros(self.num_classes, 1, device=device)
+            confusion_matrix = torch.zeros(self.num_classes, self.num_classes, device=device, dtype=torch.int64)
             
             ce_epoch_loss_val = 0
             mse_epoch_loss_val = 0
@@ -215,21 +214,17 @@ class Processor:
                 ce_epoch_loss_val += (ce*N).data.item()
                 mse_epoch_loss_val += (mse*N).data.item()
 
-                # delete unnecessary computational graph references to clear space
-                del ce, mse
-
                 # collect the correct predictions for each class and total per that class
                 # for batch_el in range(N*M):
                 for batch_el in range(N):
-                    top1_predicted_ohe = torch.zeros(L, self.num_classes, device=device)
-                    top1_predicted_ohe[range(L), top1_predicted[batch_el]] = 1
-                    confusion_matrix[labels[batch_el, 0]] += top1_predicted_ohe.sum(dim=0)
-                    total_per_class[labels[batch_el, 0]] += L
+                    # OHE 3D matrix, where label and prediction at time `t` are indices
+                    top1_ohe = torch.zeros(L, self.num_classes, self.num_classes, device=device, dtype=torch.bool)
+                    top1_ohe[range(L), top1_predicted[batch_el], labels[batch_el]] = True
+
+                    # sum-reduce OHE 3D matrix to get number of true vs. false classifications for each class on this sample
+                    confusion_matrix += torch.sum(top1_ohe, dim=0)
 
             test_end_time = time.time()
-
-            # normalize each row of the confusion matrix to obtain class probabilities
-            confusion_matrix = torch.div(confusion_matrix, total_per_class)
 
             top1_acc = top1_correct / total
             top5_acc = top5_correct / total
@@ -297,9 +292,6 @@ class Processor:
 
             ce_epoch_loss_train = 0
             mse_epoch_loss_train = 0
-
-            ce_loss = 0
-            mse_loss = 0
 
             top1_correct = 0
             top5_correct = 0
