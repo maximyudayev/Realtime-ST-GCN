@@ -110,7 +110,7 @@ class Stgcn(nn.Module):
 
         # input capture normalization
         # (N,C,L,V)
-        self.bn_in = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1))
+        self.bn_in = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
         
         # fcn for feature remapping of input to the network size
         self.fcn_in = nn.Conv2d(in_channels=kwargs['in_feat'], out_channels=kwargs['in_ch'][0][0], kernel_size=1)
@@ -313,7 +313,7 @@ class RtStgcnLayer(nn.Module):
         
         # normalization and dropout on main branch
         self.bn_relu = nn.Sequential(
-            nn.BatchNorm2d(out_channels),
+            nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.ReLU())
 
         # residual branch
@@ -324,7 +324,7 @@ class RtStgcnLayer(nn.Module):
         else:
             self.residual = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
-                nn.BatchNorm2d(out_channels))
+                nn.BatchNorm2d(out_channels, track_running_stats=False))
 
         # activation of branch sum
         # if no resnet connection, prevent ReLU from being applied twice
@@ -481,7 +481,7 @@ class StgcnLayer(nn.Module):
         
         # normalization and dropout on main branch
         self.bn_relu = nn.Sequential(
-            nn.BatchNorm2d(out_channels),
+            nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.ReLU())
 
         # residual branch
@@ -492,7 +492,7 @@ class StgcnLayer(nn.Module):
         else:
             self.residual = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
-                nn.BatchNorm2d(out_channels))
+                nn.BatchNorm2d(out_channels, track_running_stats=False))
 
         # activation of branch sum
         # if no resnet connection, prevent ReLU from being applied twice

@@ -44,7 +44,7 @@ class Model(nn.Module):
         temporal_kernel_size = kwargs['kernel'][0]
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
         
-        self.data_bn = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1))
+        self.data_bn = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
         # fcn for feature remapping of input to the network size
         self.fcn_in = nn.Conv2d(in_channels=kwargs['in_feat'], out_channels=kwargs['in_ch'][0][0], kernel_size=1)
 
@@ -182,7 +182,7 @@ class st_gcn(nn.Module):
             partitions)
 
         self.tcn = nn.Sequential(
-            nn.BatchNorm2d(out_channels),
+            nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.ReLU(inplace=True),
             nn.Conv2d(
                 out_channels,
@@ -190,7 +190,7 @@ class st_gcn(nn.Module):
                 (kernel_size[0], 1),
                 stride=(stride, 1),
                 padding=padding),
-            nn.BatchNorm2d(out_channels),
+            nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.Dropout(dropout, inplace=True))
 
         if not residual:
@@ -206,7 +206,7 @@ class st_gcn(nn.Module):
                     out_channels,
                     kernel_size=1,
                     stride=(stride, 1)),
-                nn.BatchNorm2d(out_channels))
+                nn.BatchNorm2d(out_channels, track_running_stats=False))
 
         self.relu = nn.ReLU(inplace=True)
 

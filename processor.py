@@ -382,7 +382,7 @@ class Processor:
             # save prediction and ground truth of reference sample
             ref_capture, ref_label = train_dataloader.dataset.__getitem__(328) # 328
             ref_predicted, _, _, _, _, _, _ = self.forward_(ref_capture[None], ref_label[None], device, **kwargs)
-            pd.DataFrame(torch.stack((ref_label, ref_predicted[0])).cpu().numpy()).to_csv('{0}/segmentation_epoch-{1}_train.csv'.format(save_dir, epoch))
+            pd.DataFrame(torch.stack((ref_label, ref_predicted[0].cpu())).numpy()).to_csv('{0}/segmentation_epoch-{1}_train.csv'.format(save_dir, epoch))
 
             # checkpoint the model during training at specified epochs
             if epoch in checkpoints:
@@ -427,7 +427,7 @@ class Processor:
             # save prediction and ground truth of reference sample
             ref_capture, ref_label = train_dataloader.dataset.__getitem__(328)
             ref_predicted, _, _, _, _, _, _ = self.forward_(ref_capture[None], ref_label[None], device, **kwargs)
-            pd.DataFrame(torch.stack((ref_label, ref_predicted[0])).cpu().numpy()).to_csv('{0}/segmentation_epoch-{1}_val.csv'.format(save_dir, epoch))
+            pd.DataFrame(torch.stack((ref_label, ref_predicted[0].cpu())).numpy()).to_csv('{0}/segmentation_epoch-{1}_val.csv'.format(save_dir, epoch))
 
             # save confusion matrix as a CSV file
             pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion_matrix_epoch-{1}.csv'.format(save_dir, epoch))
