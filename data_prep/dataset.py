@@ -89,7 +89,7 @@ class SkeletonDatasetFromDirectory(Dataset):
         self.labels = label_dir
 
         # create a list to map the index of a sampled data element to the corresponding filename of features and labels
-        self.dir_list = [file.split('.npy')[0] for file in os.listdir(self.data)]
+        self.dir_list = [file.split('.npy')[0] for file in sorted(os.listdir(self.data))]
 
     def __len__(self):
         return len(self.dir_list)

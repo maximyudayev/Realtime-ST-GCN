@@ -380,7 +380,7 @@ class Processor:
             top5_acc_train = top5_correct / total
             
             # save prediction and ground truth of reference sample
-            ref_capture, ref_label = train_dataloader.dataset.__getitem__(420)
+            ref_capture, ref_label = train_dataloader.dataset.__getitem__(328) # 328
             ref_predicted, _, _, _, _, _, _ = self.forward_(ref_capture[None], ref_label[None], device, **kwargs)
             pd.DataFrame(torch.stack((ref_label, ref_predicted[0])).cpu().numpy()).to_csv('{0}/segmentation_epoch-{1}_train.csv'.format(save_dir, epoch))
 
@@ -425,7 +425,7 @@ class Processor:
             duration_val_list.insert(0, duration_val)
 
             # save prediction and ground truth of reference sample
-            ref_capture, ref_label = train_dataloader.dataset.__getitem__(420)
+            ref_capture, ref_label = train_dataloader.dataset.__getitem__(328)
             ref_predicted, _, _, _, _, _, _ = self.forward_(ref_capture[None], ref_label[None], device, **kwargs)
             pd.DataFrame(torch.stack((ref_label, ref_predicted[0])).cpu().numpy()).to_csv('{0}/segmentation_epoch-{1}_val.csv'.format(save_dir, epoch))
 
