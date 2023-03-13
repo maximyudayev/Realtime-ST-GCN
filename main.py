@@ -191,13 +191,14 @@ def test(args):
 
     # construct the target model using the CLI arguments
     model = build_model(args)
-    # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
     # load the checkpoint if not trained from scratch
     if args.checkpoint:
-        model.load_state_dict({
-            k.split('module.')[1]: v 
-            for k, v in
-            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+        model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
+        
+        # model.load_state_dict({
+        #     k.split('module.')[1]: v 
+        #     for k, v in
+        #     torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
     # construct a processing wrapper
     trainer = Processor(model, args.num_classes, val_dataloader, device)

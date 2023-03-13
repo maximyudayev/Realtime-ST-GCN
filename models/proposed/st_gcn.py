@@ -114,6 +114,7 @@ class Stgcn(nn.Module):
         
         # fcn for feature remapping of input to the network size
         self.fcn_in = nn.Conv2d(in_channels=kwargs['in_feat'], out_channels=kwargs['in_ch'][0][0], kernel_size=1)
+        nn.init.kaiming_uniform_(self.fcn_in.weight, mode='fan_in', nonlinearity='relu')
         
         # stack of ST-GCN layers
         stack = [[StgcnLayer(
@@ -141,6 +142,7 @@ class Stgcn(nn.Module):
             in_channels=kwargs['out_ch'][-1][-1],
             out_channels=kwargs['num_classes'],
             kernel_size=1)
+        nn.init.kaiming_uniform_(self.fcn_out.weight, mode='fan_in', nonlinearity='relu')
 
         # learnable edge importance weighting matrices (each layer, separate weighting)
         if kwargs['importance']:
@@ -478,6 +480,7 @@ class StgcnLayer(nn.Module):
         # to avoid for-looping over several partitions)
         # partition-wise convolution results are basically stacked across channel-dimension
         self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1, bias=False)
+        nn.init.kaiming_uniform_(self.conv.weight, mode='fan_in', nonlinearity='relu')
         
         # normalization and dropout on main branch
         self.bn_relu = nn.Sequential(
@@ -493,6 +496,7 @@ class StgcnLayer(nn.Module):
             self.residual = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
                 nn.BatchNorm2d(out_channels, track_running_stats=False))
+            nn.init.kaiming_uniform_(self.residual[0].weight, mode='fan_in', nonlinearity='relu')
 
         # activation of branch sum
         # if no resnet connection, prevent ReLU from being applied twice

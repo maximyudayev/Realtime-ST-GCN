@@ -49,6 +49,10 @@
                 "10",
                 // "--checkpoint",
                 // "pretrained_models/pku-mmd/realtime/train_9_64_50_23-02-23_22:55:53/epoch-49.pt",
+                "--data",
+                "data/pku-mmdv1",
+                "--out",
+                "pretrained_models/pku-mmdv1",
                 "--config",
                 "config/pku-mmd/realtime_local.json",
             ],
@@ -96,11 +100,11 @@
                 "--kernel",
                 "9",
                 "--checkpoint",
-                "pretrained_models/pku-mmd-xsubject/realtime/train_9_64_50_08-02-23_15:01:07/final.pt",
-                "--data",
-                "data/pku-mmd-xsubject",
-                "--out",
-                "pretrained_models/pku-mmd-xsubject",
+                "pretrained_models/pku-mmd/realtime/train_9_64_50_28-02-23_23:39:20/final.pt",
+                // "--data",
+                // "data/pku-mmd-xsubject",
+                // "--out",
+                // "pretrained_models/pku-mmd-xsubject",
                 "--config",
                 "config/pku-mmd/realtime_local.json"
             ],
@@ -188,7 +192,7 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "args": [
-                "data/pku-mmd/val/features"
+                "data/pku-mmdv1/train/features"
             ]
         }
     ]
