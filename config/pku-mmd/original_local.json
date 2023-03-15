@@ -2,10 +2,10 @@
     "model": {
         "model": "original",
         "strategy": "spatial",
-        "data": "data/pku-mmd",
+        "data": "data/pku-mmdv1",
         "dataset_type": "dir",
-        "out": "pretrained_models/pku-mmd",
-        "actions": "data/pku-mmd/actions.txt",
+        "out": "pretrained_models/pku-mmdv1",
+        "actions": "data/pku-mmdv1/actions.txt",
         "graph": "data/skeletons/pku-mmd.json",
         "in_feat": 3,
         "stages": 1,
@@ -36,7 +36,7 @@
         "checkpoints": [9,19,29,39,49,59,69,79,89],
         "learning_rate": 0.0005,
         "learning_rate_decay": 1.0,
-        "batch_size": 2
+        "batch_size": 64
     },
     "job": {
         "email": "maxim.yudayev@kuleuven.be"

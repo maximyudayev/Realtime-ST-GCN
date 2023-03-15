@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -98,12 +99,12 @@ class Processor:
             else:
                 # Size to divide the trial into to construct a data parallel batch
                 # NOTE: adjust if kernel is different in multi-stage ST-GCN
-                W = kwargs['segment']-(kwargs['kernel'][0]-1)
+                W = math.ceil((L-(kwargs['kernel'][0]-1))/kwargs['segment'])
                 # if captures is perfectly unfolded without padding, P will be 0
-                P = (W-((L-kwargs['segment'])%W))%W
+                P = W*kwargs['segment']+(kwargs['kernel'][0]-1)-L
                 # Pad the end of the sequence to use all of the available readings (masks actual outputs later)
                 captures = F.pad(captures, (0, 0, 0, P))
-                captures = captures.unfold(2, kwargs['segment'], kwargs['segment']-(kwargs['kernel'][0]-1))
+                captures = captures.unfold(2, W+(kwargs['kernel'][0]-1), W)
             
             N, C, N_new, V, T_new = captures.size()
             # (N,C,N',V,T') -> batches of unfolded slices
@@ -132,14 +133,14 @@ class Processor:
                 predictions[1:,:,:kwargs['kernel'][0]-1] = 0
                 # shuffle data around for the correct contiguous access by the fold()
                 predictions = predictions[None].permute(0, 2, 3, 1).contiguous()
-                predictions = predictions.view(N, C_new * kwargs['segment'], -1)
+                predictions = predictions.view(N, C_new * (W+(kwargs['kernel'][0]-1)), -1)
                 # fold segments of the original trial computed in parallel on multiple executors back into original length sequence
                 # and drop the end padding used to fill tensor to equal row-column size
                 predictions = F.fold(
-                    predictions, 
-                    output_size=(1, L+P), 
-                    kernel_size=(1, kwargs['segment']), 
-                    stride=(1, kwargs['segment']-(kwargs['kernel'][0]-1)))[:,:,0,:L]
+                    predictions,
+                    output_size=(1, L+P),
+                    kernel_size=(1, W+(kwargs['kernel'][0]-1)),
+                    stride=(1, W))[:,:,0,:L]
 
         # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
         # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
