@@ -193,12 +193,11 @@ def test(args):
     model = build_model(args)
     # load the checkpoint if not trained from scratch
     if args.checkpoint:
-        model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
-        
-        # model.load_state_dict({
-        #     k.split('module.')[1]: v 
-        #     for k, v in
-        #     torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+        # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
+        model.load_state_dict({
+            k.split('module.')[1]: v 
+            for k, v in
+            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
     # construct a processing wrapper
     trainer = Processor(model, args.num_classes, val_dataloader, device)
@@ -303,6 +302,7 @@ if __name__ == '__main__':
             \r\t[--stride [STRIDE,[...]]]
             \r\t[--residual [RESIDUAL,[...]]]
             \r\t[--dropout [DROPOUT,[...]]]
+            \r\t[--iou_threshold [THRESHOLDS]]
             \r\t[--graph FILE]
 
             \r\t[--seed SEED]
@@ -456,6 +456,12 @@ if __name__ == '__main__':
             'For multi-stage, pass --dropout parameter multiple times '
             '(default: [[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]])')
     parser_train_model.add_argument(
+        '--iou_threshold',
+        type=float,
+        nargs='+',
+        metavar='',
+        help='list of IoU thesholds for F1@k metric (default: [0.1,0.25,0.5])')
+    parser_train_model.add_argument(
         '--graph',
         type=str,
         metavar='',
@@ -559,6 +565,7 @@ if __name__ == '__main__':
             \r\t[--stride [STRIDE,[...]]]
             \r\t[--residual [RESIDUAL,[...]]]
             \r\t[--dropout [DROPOUT,[...]]]
+            \r\t[--iou_threshold [THRESHOLDS]]
             \r\t[--graph FILE]
 
             \r\t[--data DATA_DIR]
@@ -702,6 +709,12 @@ if __name__ == '__main__':
             'For multi-stage, pass --dropout parameter multiple times '
             '(default: [[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]])')
     parser_test_model.add_argument(
+        '--iou_threshold',
+        type=float,
+        nargs='+',
+        metavar='',
+        help='list of IoU thesholds for F1@k metric (default: [0.1,0.25,0.5])')
+    parser_test_model.add_argument(
         '--graph',
         type=str,
         metavar='',
@@ -751,7 +764,6 @@ if __name__ == '__main__':
         default=0,
         help='level of log detail (default: 0)')
 
-    ##################################################################
     # benchmark command parser
     # TODO: complete the benchmark to allow automated comparison between multiple models
     parser_benchmark = subparsers.add_parser(
@@ -774,6 +786,7 @@ if __name__ == '__main__':
             \r\t[--stride [STRIDE,[...]]]
             \r\t[--residual [RESIDUAL,[...]]]
             \r\t[--dropout [DROPOUT,[...]]]
+            \r\t[--iou_threshold [THRESHOLDS]]
             \r\t[--graph FILE]
 
             \r\t[--data DATA_DIR]
@@ -917,6 +930,12 @@ if __name__ == '__main__':
             'For multi-stage, pass --dropout parameter multiple times '
             '(default: [[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]])')
     parser_benchmark_model.add_argument(
+        '--iou_threshold',
+        type=float,
+        nargs='+',
+        metavar='',
+        help='list of IoU thesholds for F1@k metric (default: [0.1,0.25,0.5])')
+    parser_benchmark_model.add_argument(
         '--graph',
         type=str,
         metavar='',
@@ -965,7 +984,6 @@ if __name__ == '__main__':
         action='count', 
         default=0,
         help='level of log detail (default: 0)')
-    ##################################################################
 
     parser_train.set_defaults(func=train)
     parser_test.set_defaults(func=test)

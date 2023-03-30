@@ -2,8 +2,8 @@
 #SBATCH -A lp_stadius_fpga_ai
 #SBATCH --cluster=wice
 #SBATCH --nodes=1
-#SBATCH --ntasks=72
-#SBATCH --gpus=4
+#SBATCH --ntasks=36
+#SBATCH --gpus-per-node=4
 #SBATCH --partition=gpu
 #SBATCH --mem-per-cpu=7000
 
@@ -20,6 +20,8 @@ mail -s "[$SLURM_JOB_NAME]: STARTED" maxim.yudayev@kuleuven.be <<< ""
 cd $SLURM_SUBMIT_DIR
 # Purge all existing software packages
 module purge
+
+export PATH="${VSC_DATA}/miniconda3/bin:${PATH}"
 
 source activate rt-st-gcn
 

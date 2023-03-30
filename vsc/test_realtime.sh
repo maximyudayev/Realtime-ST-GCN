@@ -1,0 +1,8 @@
+#!/bin/bash
+# Actual jobs
+# Can all be run on P100 GPUs (Genius)
+qsub -l walltime=10:00 -l qos=debugging -N st_gcn_pkummdv1_xview_rt_9_test -F "--kernel 9 --checkpoint '/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1/realtime/train_9_64_50_16-03-23_15:39:57/final.pt' --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_test.pbs
+qsub -l walltime=10:00 -l qos=debugging -N st_gcn_pkummdv1_xview_rt_21_test -F "--kernel 21 --checkpoint '/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1/realtime/train_21_64_50_16-03-23_18:35:12/final.pt' --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_test.pbs
+qsub -l walltime=10:00 -l qos=debugging -N st_gcn_pkummdv1_xview_rt_69_test -F "--kernel 69 --checkpoint '/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1/realtime/train_69_64_50_16-03-23_19:23:07/final.pt' --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_test.pbs
+qsub -l walltime=10:00 -l qos=debugging -N st_gcn_pkummdv1_xview_rt_153_test -F "--kernel 153 --checkpoint '/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1/realtime/train_153_64_50_16-03-23_22:16:22/final.pt' --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_test.pbs
+qsub -l walltime=10:00 -l qos=debugging -N st_gcn_pkummdv1_xview_rt_299_test -F "--kernel 299 --checkpoint '/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1/realtime/train_299_64_50_17-03-23_00:35:28/final.pt' --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_test.pbs
