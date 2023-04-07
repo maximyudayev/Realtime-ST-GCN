@@ -114,13 +114,21 @@ Datasets provide data as a 5D tensor in the format (N-batch, C-channels, L-lengt
   * Train - (40091, 3, 300, 25, 2)
   * Validation - (16487, 3, 300, 25, 2)
 
-* PKU-MMD, 51 action classes, cross-view dataset dimensions (each trial may differ in duration):
+* PKU-MMDv2, 51 action classes, cross-view dataset dimensions (each trial may differ in duration):
   * Train - (671, 3, ..., 25, 1)
   * Validation - (338, 3, ..., 25, 1)
 
-* PKU-MMD, 51 action classes, cross-subject dataset dimensions (each trial may differ in duration):
+* PKU-MMDv2, 51 action classes, cross-subject dataset dimensions (each trial may differ in duration):
   * Train - (775, 3, ..., 25, 1)
   * Validation - (234, 3, ..., 25, 1)
+
+* PKU-MMDv1, 52 action classes, cross-view dataset dimensions (each trial may differ in duration):
+  * Train - (717, 3, ..., 25, 1)
+  * Validation - (359, 3, ..., 25, 1)
+
+* PKU-MMDv1, 52 action classes, cross-subject dataset dimensions (each trial may differ in duration):
+  * Train - (944, 3, ..., 25, 1)
+  * Validation - (132, 3, ..., 25, 1)
 
 ### Config Structure
 Config files configure the execution script, model architecture, optimizer settings, training state, etc. This provides separation of concern and clean abstraction from source code for the user to prototype the model on various use cases and configuration by simply editing or providing a new JSON file to the execution script.

@@ -5,6 +5,7 @@
         "data": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1",
         "dataset_type": "dir",
         "out": "/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
+        "backup": "/data/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
         "actions": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1/actions.txt",
         "graph": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/skeletons/pku-mmd.json",
         "in_feat": 3,

@@ -17,7 +17,7 @@ from datetime import datetime
 
 def common(args):
     """Performs setup common to any ST-GCN model variant.
-    
+
     Only needs to be invoked once for a given problem (train-test, benchmark, etc.). 
     Corresponds to the parts of the pipeline irrespective of the black-box model used.
     Creates DataLoaders, sets up processing device and random number generator,
@@ -34,7 +34,7 @@ def common(args):
 
         Train and validation DataLoaders.
     """
-    
+
     # setting up random number generator for deterministic and meaningful benchmarking
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     random.seed(args.seed)
@@ -52,10 +52,10 @@ def common(args):
 
     # trials of different length can not be placed in the same tensor when batching, have to manually iterate over them
     batch_size = 1 if args.dataset_type == 'dir' else args.batch_size
-    
+
     train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
     val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
-    
+
     # extract skeleton graph data
     with open(args.graph, 'r') as graph_file:
         graph = json.load(graph_file)
@@ -77,7 +77,7 @@ def common(args):
 
     # prepare a directory to store results
     save_dir = "{0}/{1}/{2}_{3}".format(
-        args.out, 
+        args.out,
         args.model + ('_red' if args.model == 'original' and args.latency else ''), 
         '_'.join(jobname),
         datetime.now().strftime('%d-%m-%y_%H:%M:%S'))
@@ -90,16 +90,16 @@ def common(args):
 
 def build_model(args):
     """Builds the selected ST-GCN model variant.
-    
+
     Args:
         args : ``dict``
             Parsed CLI arguments.
 
     Returns:
         PyTorch Model corresponding to the user-defined CLI parameters.
-    
+
     Raises:
-        ValueError: 
+        ValueError:
             If GCN parameter list sizes do not match the number of stages.
     """
 
@@ -114,7 +114,7 @@ def build_model(args):
         raise ValueError(
             'Selected the realtime model, but set buffer size to 1. '
             'Check your config file.')
-    
+
     if args.model == 'original':
         model = OriginalStgcn(**vars(args))
     elif args.model == 'adapted':
@@ -123,7 +123,7 @@ def build_model(args):
         # all 3 adapted versions are encapsulated in the same class, training is identical (batch mode),
         # usecase changes applied during inference
         model = Stgcn(**vars(args))
-    
+
     return model
 
 
@@ -156,18 +156,40 @@ def train(args):
 
     # last dimension is the number of subjects in the scene (2 for datasets used)
     print("Training started", flush=True, file=args.log[0])
-    
+
     # perform the training
     # (the model is trained on all skeletons in the scene, simultaneously)
     trainer.train(
         save_dir=save_dir,
         train_dataloader=train_dataloader,
         val_dataloader=val_dataloader,
-        device=device,    
+        device=device,
         **vars(args))
-    
+
     print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
-    
+
+    # copy over resulting files of interest into the $VSC_DATA persistent storage
+    if args.backup:
+        backup_dir = "{0}/{1}".format(
+            args.backup,
+            '/'.join(save_dir.split('/')[-2:]))
+
+        if not os.path.exists(backup_dir):
+            os.makedirs(backup_dir)
+
+        for f in [
+            'accuracy-curve.csv',
+            'train-validation-curve.csv',
+            'final.pt',
+            'macro-F1@k.csv',
+            'accuracy.csv',
+            'edit.csv',
+            'confusion-matrix.csv',
+            'segmentation-175.csv',
+            'segmentation-293.csv',
+            'segmentation-37.csv']:
+            os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
+
     os.system(
         'mail -s "[{0}]: COMPLETED" {1} <<< ""'
         .format(
@@ -206,12 +228,31 @@ def test(args):
 
     # last dimension is the number of subjects in the scene (2 for datasets used)
     print("Testing started", flush=True, file=args.log[0])
-    
+
     # perform the testing
     trainer.test(save_dir, val_dataloader, device, **vars(args))
-    
+
     print("Testing completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
-    
+
+    # copy over resulting files of interest into the $VSC_DATA persistent storage
+    if args.backup:
+        backup_dir = "{0}/{1}".format(
+            args.backup,
+            '/'.join(save_dir.split('/')[-2:]))
+
+        if not os.path.exists(backup_dir):
+            os.makedirs(backup_dir)
+
+        for f in [
+            'macro-F1@k.csv',
+            'accuracy.csv',
+            'edit.csv',
+            'confusion-matrix.csv',
+            'segmentation-175.csv',
+            'segmentation-293.csv',
+            'segmentation-37.csv']:
+            os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
+
     os.system(
         'mail -s "[{0}]: COMPLETED" {1} <<< ""'
         .format(
@@ -237,11 +278,11 @@ def benchmark(args):
 
     # construct the target model using the CLI arguments
     model = build_model(args)
-    # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
     # load the checkpoint if not trained from scratch
     if args.checkpoint:
+        # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
         model.load_state_dict({
-            k.split('module.')[1]: v 
+            k.split('module.')[1]: v
             for k, v in
             torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
@@ -252,12 +293,12 @@ def benchmark(args):
 
     # last dimension is the number of subjects in the scene (2 for datasets used)
     print("Benchmarking started", flush=True, file=args.log[0])
-    
+
     # perform the testing
     trainer.benchmark(save_dir, val_dataloader, device, **vars(args))
 
     print("Benchmarking completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
-    
+
     os.system(
         'mail -s "[{0}]: COMPLETED" {1} <<< ""'
         .format(
@@ -274,18 +315,18 @@ if __name__ == '__main__':
         prog='main',
         description='Script for human action segmentation processing using ST-GCN networks.',
         epilog='TODO: add the epilog')
-    
+
     subparsers= parser.add_subparsers(
-        title='commands', 
+        title='commands',
         dest='command',
         required=True)
-        
-    # train command parser (must manually update usage after changes 
+
+    # train command parser (must manually update usage after changes
     # to the argument list or provide a custom formatter)
     parser_train = subparsers.add_parser(
         'train',
         usage="""%(prog)s [-h]
-            \r\t[--config FILE]            
+            \r\t[--config FILE]
             \r\t[--model MODEL {realtime|buffer_realtime|batch|original}]
             \r\t[--strategy STRATEGY {uniform|distance|spatial}]
             \r\t[--in_feat IN_FEAT]
@@ -316,6 +357,7 @@ if __name__ == '__main__':
             \r\t[--dataset_type TYPE]
             \r\t[--actions FILE]
             \r\t[--out OUT_DIR]
+            \r\t[--backup BACKUP_DIR]
             \r\t[--checkpoint CHECKPOINT]
             \r\t[--log O_FILE E_FILE]
             \r\t[--email EMAIL]
@@ -421,7 +463,7 @@ if __name__ == '__main__':
             '(default: [[64,64,64,64,128,128,128,256,256]])')
     parser_train_model.add_argument(
         '--out_ch',
-        type=int, 
+        type=int,
         nargs='+',
         action='append',
         metavar='',
@@ -430,7 +472,7 @@ if __name__ == '__main__':
             '(default: [[64,64,64,128,128,128,256,256,256]])')
     parser_train_model.add_argument(
         '--stride',
-        type=int, 
+        type=int,
         nargs='+',
         action='append',
         metavar='',
@@ -439,7 +481,7 @@ if __name__ == '__main__':
             '(default: [[1,1,1,2,1,1,2,1,1]])')
     parser_train_model.add_argument(
         '--residual',
-        type=int, 
+        type=int,
         nargs='+',
         action='append',
         metavar='',
@@ -518,6 +560,10 @@ if __name__ == '__main__':
         metavar='',
         help='path to the output directory (default: pretrained_models/pku-mmd)')
     parser_train_io.add_argument(
+        '--backup',
+        metavar='',
+        help='path to the backup directory to copy over final files after completion (default: None)')
+    parser_train_io.add_argument(
         '--checkpoint',
         type=str,
         metavar='',
@@ -540,7 +586,7 @@ if __name__ == '__main__':
         help='email address to send update notifications to (default: None)')
     parser_train_io.add_argument(
         '-v', '--verbose', dest='verbose',
-        action='count', 
+        action='count',
         default=0,
         help='level of log detail (default: 0)')
 
@@ -548,7 +594,7 @@ if __name__ == '__main__':
     parser_test = subparsers.add_parser(
         'test',
         usage="""%(prog)s\n\t[-h]
-            \r\t[--config FILE]            
+            \r\t[--config FILE]
             \r\t[--model MODEL {realtime|buffer_realtime|batch|original}]
             \r\t[--strategy STRATEGY {uniform|distance|spatial}]
             \r\t[--in_feat IN_FEAT]
@@ -572,6 +618,7 @@ if __name__ == '__main__':
             \r\t[--dataset_type TYPE]
             \r\t[--actions FILE]
             \r\t[--out OUT_DIR]
+            \r\t[--backup BACKUP_DIR]
             \r\t[--checkpoint CHECKPOINT]
             \r\t[--log O_FILE E_FILE]
             \r\t[--email EMAIL]
@@ -674,7 +721,7 @@ if __name__ == '__main__':
             '(default: [[64,64,64,64,128,128,128,256,256]])')
     parser_test_model.add_argument(
         '--out_ch',
-        type=int, 
+        type=int,
         nargs='+',
         action='append',
         metavar='',
@@ -683,7 +730,7 @@ if __name__ == '__main__':
             '(default: [[64,64,64,128,128,128,256,256,256]])')
     parser_test_model.add_argument(
         '--stride',
-        type=int, 
+        type=int,
         nargs='+',
         action='append',
         metavar='',
@@ -692,7 +739,7 @@ if __name__ == '__main__':
             '(default: [[1,1,1,2,1,1,2,1,1]])')
     parser_test_model.add_argument(
         '--residual',
-        type=int, 
+        type=int,
         nargs='+',
         action='append',
         metavar='',
@@ -738,6 +785,10 @@ if __name__ == '__main__':
         metavar='',
         help='path to the output directory (default: pretrained_models/pku-mmd)')
     parser_test_io.add_argument(
+        '--backup',
+        metavar='',
+        help='path to the backup directory to copy over final files after completion (default: None)')
+    parser_test_io.add_argument(
         '--checkpoint',
         type=str,
         metavar='',
@@ -760,7 +811,7 @@ if __name__ == '__main__':
         help='email address to send update notifications to (default: None)')
     parser_test_io.add_argument(
         '-v', '--verbose', dest='verbose',
-        action='count', 
+        action='count',
         default=0,
         help='level of log detail (default: 0)')
 
@@ -769,7 +820,7 @@ if __name__ == '__main__':
     parser_benchmark = subparsers.add_parser(
         'benchmark',
         usage="""%(prog)s\n\t[-h]
-            \r\t[--config FILE]            
+            \r\t[--config FILE]
             \r\t[--model MODEL {realtime|buffer_realtime|batch|original}]
             \r\t[--strategy STRATEGY {uniform|distance|spatial}]
             \r\t[--in_feat IN_FEAT]
@@ -895,7 +946,7 @@ if __name__ == '__main__':
             '(default: [[64,64,64,64,128,128,128,256,256]])')
     parser_benchmark_model.add_argument(
         '--out_ch',
-        type=int, 
+        type=int,
         nargs='+',
         action='append',
         metavar='',
@@ -904,7 +955,7 @@ if __name__ == '__main__':
             '(default: [[64,64,64,128,128,128,256,256,256]])')
     parser_benchmark_model.add_argument(
         '--stride',
-        type=int, 
+        type=int,
         nargs='+',
         action='append',
         metavar='',
@@ -913,7 +964,7 @@ if __name__ == '__main__':
             '(default: [[1,1,1,2,1,1,2,1,1]])')
     parser_benchmark_model.add_argument(
         '--residual',
-        type=int, 
+        type=int,
         nargs='+',
         action='append',
         metavar='',
@@ -981,7 +1032,7 @@ if __name__ == '__main__':
         help='email address to send update notifications to (default: None)')
     parser_benchmark_io.add_argument(
         '-v', '--verbose', dest='verbose',
-        action='count', 
+        action='count',
         default=0,
         help='level of log detail (default: 0)')
 
