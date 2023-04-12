@@ -189,7 +189,7 @@ class Processor:
         labels,
         device=None,
         **kwargs):
-        """Does the forward pass on the model.
+        """Generator that does the forward pass on the model.
 
         If `dataset_type` is `'dir'`, processes 1 trial at a time, chops each sequence 
         into equal segments that are split across available executors (GPUs) for parallel computation.
@@ -199,6 +199,11 @@ class Processor:
         reduced temporal resolution inversely proportional to the size of the window. Trades prediction
         resolution for compute (does not compute redundant values for input frames otherwise overlapped by 
         multiple windows).
+
+        TODO: automatically split the trial into segments to fit in available memory.
+        TODO: provide different stride settings for the original model (not only the extremas).
+        TODO: add a drawing to the repo to clarify how data segmenting is done.
+        TODO: move tensor segmenting/splitting code into corresponding model files.
         """
 
         # move both data to the compute device
@@ -210,20 +215,37 @@ class Processor:
         # Splits trial into overlapping subsequences of samples
         if kwargs['dataset_type'] == 'dir': 
             if kwargs['model'] == 'original':
-                # zero pad the input across time from start by the receptive field size
-                captures = F.pad(captures, (0, 0, kwargs['receptive_field']-1, 0))
+                # size to divide the trial into to construct a data parallel batch (unfolded segments contain data per single prediction)
+                # offset size between windows
                 stride = kwargs['receptive_field'] if kwargs['latency'] else 1
-                captures = captures.unfold(2, kwargs['receptive_field'], stride)
+                # window size
+                W = kwargs['receptive_field']
+                # segment size to further divide the trial into to create a generator to limit memory burden
+                # (outputs can be computer and backpropagated independently because loss function has reduction type `mean`)
+                S = math.ceil((L+(kwargs['receptive_field']-1)-(kwargs['kernel'][0]-1))/kwargs['segment'])
+                # pad the start by the receptive field size
+                P_start = kwargs['receptive_field']-1
+                # no end padding needed for the original models because unfolding is done per output (incl. reduced temporal resolution)
+                P_end = 0
+                # slice labels if reduced temporal resolution is used
                 labels = labels[:, ::stride]
             else:
-                # Size to divide the trial into to construct a data parallel batch
+                # size to divide the trial into to construct a data parallel batch (unfolded segments contain data per multiple predictions)
                 # NOTE: adjust if kernel is different in multi-stage ST-GCN
-                W = math.ceil((L-(kwargs['kernel'][0]-1))/kwargs['segment'])
+                # offset size between windows
+                stride = math.ceil((L-(kwargs['kernel'][0]-1))/kwargs['segment'])
+                # window size
+                W = stride+(kwargs['kernel'][0]-1)
+                # no start padding needed for our RT model because elements are summed internally with a Toeplitz matrix to mimic FIFO behavior
+                # (only needs to overlap the previous segment by the size of the kernel-1 to mimic prefilled FIFOs to retain same state is if processed continuously)
+                P_start = 0
                 # if captures is perfectly unfolded without padding, P will be 0
-                P = W*kwargs['segment']+(kwargs['kernel'][0]-1)-L
-                # Pad the end of the sequence to use all of the available readings (masks actual outputs later)
-                captures = F.pad(captures, (0, 0, 0, P))
-                captures = captures.unfold(2, W+(kwargs['kernel'][0]-1), W)
+                # pad the end of the sequence to use all of the available readings (masks actual outputs later)
+                P_end = stride*kwargs['segment']+(kwargs['kernel'][0]-1)-L
+
+            captures = F.pad(captures, (0, 0, P_start, P_end))
+            # unfold the sequence to get the view with (overlapping) segments over original
+            captures = captures.unfold(2, W, stride)
 
             N, C, N_new, V, T_new = captures.size()
             # (N,C,N',V,T') -> batches of unfolded slices
@@ -234,59 +256,73 @@ class Processor:
             captures = captures.view(N * N_new, C, T_new, V)
             # (N'',C,T',V)
 
-        # make predictions and compute the loss
-        # forward pass the minibatch through the model for the corresponding subject
-        # the input tensor has shape (N, V, C, L): N-batch, V-nodes, C-channels, L-length
-        # the output tensor has shape (N, C', L)
-        predictions = self.model(Variable(captures, requires_grad=True))
-
-        if kwargs['dataset_type'] == 'dir':
-            C_new = predictions.size(1)
+            # wraps tensor data for both model types in a generator comprehension
             if kwargs['model'] == 'original':
-                # arrange tensor back into a time series
-                predictions = predictions.view(N, N_new, C_new)
-                predictions = predictions.permute(0, 2, 1)
-            else:
-                # clear the overlapping Gamma-1 predictions at the start of each segment (except the very first segment), since 
-                # overlapped regions are added when folding the tensor
-                predictions[1:,:,:kwargs['kernel'][0]-1] = 0
-                # shuffle data around for the correct contiguous access by the fold()
-                predictions = predictions[None].permute(0, 2, 3, 1).contiguous()
-                predictions = predictions.view(N, C_new * (W+(kwargs['kernel'][0]-1)), -1)
-                # fold segments of the original trial computed in parallel on multiple executors back into original length sequence
-                # and drop the end padding used to fill tensor to equal row-column size
-                predictions = F.fold(
-                    predictions,
-                    output_size=(1, L+P),
-                    kernel_size=(1, W+(kwargs['kernel'][0]-1)),
-                    stride=(1, W))[:,:,0,:L]
+                capture_gen = ((captures[S*i:S*(i+1)], S*i, S*(i+1) if S*(i+1) < N*N_new else N*N_new) for i in range(kwargs['segment']))
+            else: 
+                capture_gen = ((captures, 0, L) for _ in range(1))
 
-        # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
-        # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
-        # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
-        # CE guides model toward absolute correctness on single frame predictions,
-        # MSE component punishes large variations in class probabilities between consecutive samples
-        ce = self.ce(predictions, labels)
-        # In the reduced temporal resolution setting of the original model, MSE loss is expected to be large the higher
-        # the receptive field since after that many frames a human could start performing a drastically diferent action
-        mse = 0.15 * torch.mean(
-            torch.clamp(
-                self.mse(
-                    F.log_softmax(predictions[:,:,1:], dim=1), 
-                    F.log_softmax(predictions.detach()[:,:,:-1], dim=1)),
-                min=0,
-                max=16))
+            # generate results for the consumer (effectively limits processing burden by splitting long sequence into manageable independent overlapping chunks)
+            for (segment, start, end) in capture_gen:
+                # make predictions and compute the loss
+                # forward pass the minibatch through the model for the corresponding subject
+                # the input tensor has shape (N, V, C, L): N-batch, V-nodes, C-channels, L-length
+                # the output tensor has shape (N, C', L)
+                predictions = self.model(Variable(segment, requires_grad=True))
 
-        # calculate the predictions statistics
-        # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
-        top5_probs, top5_predicted = torch.topk(F.softmax(predictions, dim=1), k=5, dim=1)
-        top1_predicted = top5_predicted[:,0,:]
-        # top5_probs[0,:,torch.bitwise_and(torch.any(top5_predicted == labels[:,None,:], dim=1), top1_predicted != labels)[0]].permute(1,0) # probabilities of classes where top-1 and top-5 don't intersect
-        top1_cor = torch.sum(top1_predicted == labels).data.item()
-        top5_cor = torch.sum(top5_predicted == labels[:,None,:]).data.item()
-        tot = labels.numel()
+                if kwargs['dataset_type'] == 'dir':
+                    C_new = predictions.size(1)
+                    if kwargs['model'] == 'original':
+                        # arrange tensor back into a time series
+                        predictions = predictions.view(N, end-start, C_new)
+                        predictions = predictions.permute(0, 2, 1)
+                    else:
+                        # clear the overlapping Gamma-1 predictions at the start of each segment (except the very first segment), since 
+                        # overlapped regions are added when folding the tensor
+                        predictions[1:,:,:kwargs['kernel'][0]-1] = 0
+                        # shuffle data around for the correct contiguous access by the fold()
+                        predictions = predictions[None].permute(0, 2, 3, 1).contiguous()
+                        predictions = predictions.view(N, C_new * W, -1)
+                        # fold segments of the original trial computed in parallel on multiple executors back into original length sequence
+                        # and drop the end padding used to fill tensor to equal row-column size
+                        predictions = F.fold(
+                            predictions,
+                            output_size=(1, L+P_end),
+                            kernel_size=(1, W),
+                            stride=(1, stride))[:,:,0,:L]
 
-        return top1_predicted, top5_predicted, top1_cor, top5_cor, tot, ce, mse
+                # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
+                # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
+                # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
+                # CE guides model toward absolute correctness on single frame predictions,
+                # MSE component punishes large variations in class probabilities between consecutive samples
+                ce = self.ce(predictions, labels[:,start:end])
+                # In the reduced temporal resolution setting of the original model, MSE loss is expected to be large the higher
+                # the receptive field since after that many frames a human could start performing a drastically diferent action
+                mse = 0.15 * torch.mean(
+                    torch.clamp(
+                        self.mse(
+                            F.log_softmax(predictions[:,:,1:], dim=1), 
+                            F.log_softmax(predictions.detach()[:,:,:-1], dim=1)),
+                        min=0,
+                        max=16))
+
+                if kwargs['model'] == 'original':
+                    ce /= kwargs['segment']
+                    mse /= kwargs['segment']
+
+                # calculate the predictions statistics
+                # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
+                top5_probs, top5_predicted = torch.topk(F.softmax(predictions, dim=1), k=5, dim=1)
+                top1_predicted = top5_predicted[:,0,:]
+                # top5_probs[0,:,torch.bitwise_and(torch.any(top5_predicted == labels[:,None,:], dim=1), top1_predicted != labels)[0]].permute(1,0) # probabilities of classes where top-1 and top-5 don't intersect
+                top1_cor = torch.sum(top1_predicted == labels[:,start:end]).data.item()
+                top5_cor = torch.sum(top5_predicted == labels[:,None,start:end]).data.item()
+                tot = labels.numel()
+
+                yield top1_predicted, top5_predicted, labels[:,start:end], top1_cor, top5_cor, tot, ce, mse
+        else:
+            raise NotImplementedError('Did not provide a safe `forward_` implementation for file-based dataset types since #93df7ae')
 
 
     def train_(
@@ -304,41 +340,42 @@ class Processor:
         total = 0
 
         # sweep through the training dataset in minibatches
+        # TODO: make changes for file dataset type
         for i, (captures, labels) in enumerate(dataloader):
             N, _, _, _ = captures.size()
 
-            _, _, top1_cor, top5_cor, tot, ce, mse = self.forward_(captures, labels, device, **kwargs)
+            # generator that returns lazy iterator over segments of the trial to process long sequence in manageable overlapping chunks to fit in memory
+            for _, _, _, top1_cor, top5_cor, tot, ce, mse in self.forward_(captures, labels, device, **kwargs):
+                top1_correct += top1_cor
+                top5_correct += top5_cor
+                total += tot
 
-            top1_correct += top1_cor
-            top5_correct += top5_cor
-            total += tot
+                # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
+                # which will then be averaged across the entire dataset size, since
+                # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
+                # (used for statistics)
+                ce_epoch_loss_train += (ce*N).data.item()
+                mse_epoch_loss_train += (mse*N).data.item()
 
-            # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
-            # which will then be averaged across the entire dataset size, since
-            # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
-            # (used for statistics)
-            ce_epoch_loss_train += (ce*N).data.item()
-            mse_epoch_loss_train += (mse*N).data.item()
+                # loss is already a mean across minibatch for tensor of equally long trials, but
+                # not for different-length trials -> needs averaging
+                loss = ce + mse
+                if (kwargs['dataset_type'] == 'dir' and
+                    (len(dataloader) % kwargs['batch_size'] == 0 or
+                    i < len(dataloader) - (len(dataloader) % kwargs['batch_size']))):
 
-            # loss is already a mean across minibatch for tensor of equally long trials, but
-            # not for different-length trials -> needs averaging
-            loss = ce + mse
-            if (kwargs['dataset_type'] == 'dir' and
-                (len(dataloader) % kwargs['batch_size'] == 0 or
-                i < len(dataloader) - (len(dataloader) % kwargs['batch_size']))):
+                    # if the minibatch is the same size as requested (first till one before last minibatch)
+                    # (because dataset is a multiple of batch size or if current minibatch is of requested size)
+                    loss /= kwargs['batch_size']
+                elif (kwargs['dataset_type'] == 'dir'and 
+                    (len(dataloader) % kwargs['batch_size'] != 0 and
+                    i >= len(dataloader) - (len(dataloader) % kwargs['batch_size']))):
 
-                # if the minibatch is the same size as requested (first till one before last minibatch)
-                # (because dataset is a multiple of batch size or if current minibatch is of requested size)
-                loss /= kwargs['batch_size']
-            elif (kwargs['dataset_type'] == 'dir'and 
-                (len(dataloader) % kwargs['batch_size'] != 0 and
-                i >= len(dataloader) - (len(dataloader) % kwargs['batch_size']))):
+                    # if the minibatch is smaller than requested (last minibatch)
+                    loss /= (len(dataloader) % kwargs['batch_size'])
 
-                # if the minibatch is smaller than requested (last minibatch)
-                loss /= (len(dataloader) % kwargs['batch_size'])
-
-            # backward pass to compute the gradients
-            loss.backward()
+                # backward pass to compute the gradients
+                loss.backward()
 
             # zero the gradient buffers after every batch
             # if dataset is a tensor with equal length trials, always enters
@@ -393,28 +430,29 @@ class Processor:
             # calculate IoU for the F1@k metrics
             # NOTE: (assumes N=1)
             for k, (captures, labels) in enumerate(dataloader):
-                top1_predicted, _, top1_cor, top5_cor, tot, ce, mse = self.forward_(captures, labels, device, **kwargs)
+                top1_predicted = []
+                for segment_top1_predicted, _, segment_labels, top1_cor, top5_cor, tot, ce, mse in self.forward_(captures, labels, device, **kwargs):
+                    N, _ = segment_labels.size()
 
-                # to calculate loss correctly, account for non-overlapping original model with reduced temporal resolution
-                if kwargs['model'] == 'original':
-                    labels = labels[:, ::kwargs['receptive_field'] if kwargs['latency'] else 1]
+                    # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
+                    # which will then be averaged across the entire dataset size, since
+                    # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
+                    # (used for statistics)
+                    ce_epoch_loss_val += (ce*N).data.item()
+                    mse_epoch_loss_val += (mse*N).data.item()
+
+                    # evaluate the model
+                    top1_correct += top1_cor
+                    top5_correct += top5_cor
+                    total += tot
+                    top1_predicted.append(segment_top1_predicted)
+                
+                top1 = torch.concat(top1_predicted, dim=1)
                 labels = labels.to(device)
-                N, _ = labels.size()
-
-                # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
-                # which will then be averaged across the entire dataset size, since
-                # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
-                # (used for statistics)
-                ce_epoch_loss_val += (ce*N).data.item()
-                mse_epoch_loss_val += (mse*N).data.item()
-
-                # evaluate the model
-                f1[k] = self.f1_score(threshold, labels, top1_predicted, device=device)
-                edit_score += self.edit_score(labels, top1_predicted, device=device)
-                confusion_matrix += self.confusion_matrix(labels, top1_predicted, device=device)
-                top1_correct += top1_cor
-                top5_correct += top5_cor
-                total += tot
+                
+                f1[k] = self.f1_score(threshold, labels, top1, device=device)
+                edit_score += self.edit_score(labels, top1, device=device)
+                confusion_matrix += self.confusion_matrix(labels, top1, device=device)
 
             test_end_time = time.time()
             duration = test_end_time - test_start_time
@@ -556,9 +594,11 @@ class Processor:
                 # (captures is a batch of full-length captures, label is a batch of ground truths)
                 captures, labels = captures[None].to(device), labels[None].to(device)
 
-                top1_predicted, _, _, _, _, _, _ = self.forward_(captures, labels, device=device, **kwargs)
+                top1_predicted = []
+                for segment_top1_predicted, _, _, _, _, _, _, _ in self.forward_(captures, labels, device=device, **kwargs):
+                    top1_predicted.append(segment_top1_predicted)
 
-                pd.DataFrame(torch.stack((labels[0], top1_predicted[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}.csv'.format(save_dir, i))
+                pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}.csv'.format(save_dir, i))
 
             # log and send notifications
             print(
@@ -677,9 +717,11 @@ class Processor:
             # (captures is a batch of full-length captures, label is a batch of ground truths)
             captures, labels = captures[None].to(device), labels[None].to(device)
 
-            top1_predicted, _, _, _, _, _, _ = self.forward_(captures, labels, device, **kwargs)
+            top1_predicted = []
+            for segment_top1_predicted, _, _, _, _, _, _, _ in self.forward_(captures, labels, device=device, **kwargs):
+                top1_predicted.append(segment_top1_predicted)
 
-            pd.DataFrame(torch.stack((labels[0], top1_predicted[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}.csv'.format(save_dir, i))
+            pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}.csv'.format(save_dir, i))
 
         # log and send notifications
         print(

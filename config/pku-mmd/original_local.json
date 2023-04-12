@@ -11,6 +11,7 @@
         "stages": 1,
         "layers": [9],
         "kernel": [9],
+        "segment": 4,
         "latency": false,
         "importance": true,
         "receptive_field": 300,
