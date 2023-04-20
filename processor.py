@@ -258,8 +258,9 @@ class Processor:
 
             # wraps tensor data for both model types in a generator comprehension
             if kwargs['model'] == 'original':
-                capture_gen = ((captures[S*i:S*(i+1)], S*i, S*(i+1) if S*(i+1) < N*N_new else N*N_new) for i in range(kwargs['segment']))
-            else: 
+                #capture_gen = ((captures[S*i:S*(i+1)], S*i, S*(i+1) if S*(i+1) < N*N_new else N*N_new) for i in range(kwargs['segment']) if S1*i < L)
+                capture_gen = ((captures[kwargs['segment']*i:kwargs['segment']*(i+1)], kwargs['segment']*i, kwargs['segment']*(i+1) if kwargs['segment']*(i+1) < N*N_new else N*N_new) for i in range(math.ceil(L/kwargs['segment'])))
+            else:
                 capture_gen = ((captures, 0, L) for _ in range(1))
 
             # generate results for the consumer (effectively limits processing burden by splitting long sequence into manageable independent overlapping chunks)
@@ -308,8 +309,8 @@ class Processor:
                         max=16))
 
                 if kwargs['model'] == 'original':
-                    ce /= kwargs['segment']
-                    mse /= kwargs['segment']
+                    ce /= math.ceil(L/kwargs['segment'])
+                    mse /= math.ceil(L/kwargs['segment'])
 
                 # calculate the predictions statistics
                 # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
@@ -318,7 +319,7 @@ class Processor:
                 # top5_probs[0,:,torch.bitwise_and(torch.any(top5_predicted == labels[:,None,:], dim=1), top1_predicted != labels)[0]].permute(1,0) # probabilities of classes where top-1 and top-5 don't intersect
                 top1_cor = torch.sum(top1_predicted == labels[:,start:end]).data.item()
                 top5_cor = torch.sum(top5_predicted == labels[:,None,start:end]).data.item()
-                tot = labels.numel()
+                tot = labels[:,start:end].numel()
 
                 yield top1_predicted, top5_predicted, labels[:,start:end], top1_cor, top5_cor, tot, ce, mse
         else:
