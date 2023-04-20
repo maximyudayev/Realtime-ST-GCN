@@ -1,18 +1,18 @@
 #!/bin/bash
 #SBATCH -A lp_stadius_fpga_ai
-#SBATCH --cluster=wice
+#SBATCH --cluster=genius
 #SBATCH --nodes=1
-#SBATCH --ntasks=36
-#SBATCH --gpus-per-node=4
-#SBATCH --partition=gpu
-#SBATCH --mem-per-cpu=7000
+#SBATCH --ntasks=32
+#SBATCH --gpus-per-node=8
+#SBATCH --partition=gpu_v100
+#SBATCH --mem-per-cpu=20000
 
 #SBATCH --mail-type=FAIL,BEGIN,END
 #SBATCH --mail-user=maxim.yudayev@kuleuven.be
 
-# (1/4) Full Icelake x4 A100 GPU node (requires 18 cores per gpu)
+# (1/2) Full Cascadelake x8 V100 GPU node (requires 4 cores per gpu)
 # GPU partition
-# Icelake GPU nodes have 512GB
+# Cascadelake GPU nodes have 768GB
 
 mail -s "[$SLURM_JOB_NAME]: STARTED" maxim.yudayev@kuleuven.be <<< ""
 
