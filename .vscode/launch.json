@@ -16,11 +16,11 @@
                 "--receptive_field",
                 "50",
                 "--segment",
-                "16",
+                "1000",
                 // "--checkpoint",
                 // "pretrained_models/pku-mmd/original/train_9_50_64_50_24-02-23_02:04:57/epoch-49.pt",
                 "--config",
-                "config/pku-mmd/original_local.json"
+                "config/pku-mmd/original_vsc.json"
             ],
         },
         {

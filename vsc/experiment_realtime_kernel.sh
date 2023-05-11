@@ -1,11 +1,6 @@
 #!/bin/bash
 # 1 epoch jobs to estimate the time needed per configuration
-#qsub -l walltime=30:00 -N st_gcn_pkummdv1_rt_9_64_1_debug -F "--epochs 1 --kernel 9 --batch_size 64 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
-#qsub -l walltime=30:00 -N st_gcn_pkummd_rt_21_64_1_debug -F "--epochs 1 --kernel 21 --batch_size 64 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
-#qsub -l walltime=30:00 -N st_gcn_pkummd_rt_69_64_1_debug -F "--epochs 1 --kernel 69 --batch_size 64 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
-#qsub -l walltime=30:00 -N st_gcn_pkummd_rt_153_64_1_debug -F "--epochs 1 --kernel 153 --batch_size 64 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
-#qsub -l walltime=30:00 -N st_gcn_pkummd_rt_299_64_1_debug -F "--epochs 1 --kernel 299 --batch_size 64 --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'" st_gcn_gpu_train.pbs
-
+sbatch --time 00:30:00 --job-name=st_gcn_pkummdv1_xview_rt_9_64_1_p100debug --output debug/st_gcn_pkummdv1_xview_rt_9_64_1_p100debug.out --error debug/st_gcn_pkummdv1_xview_rt_9_64_1_p100debug.err st_gcn_gpu_debug_p100.slurm --epochs 1 --kernel 9 --batch_size 64 --data '/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1-subset' --config '/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json'
 
 # Actual jobs
 # Can all be run on P100 GPUs (Genius)

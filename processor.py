@@ -259,23 +259,23 @@ class Processor:
             # wraps tensor data for both model types in a generator comprehension
             if kwargs['model'] == 'original':
                 #capture_gen = ((captures[S*i:S*(i+1)], S*i, S*(i+1) if S*(i+1) < N*N_new else N*N_new) for i in range(kwargs['segment']) if S1*i < L)
-                capture_gen = ((captures[kwargs['segment']*i:kwargs['segment']*(i+1)], kwargs['segment']*i, kwargs['segment']*(i+1) if kwargs['segment']*(i+1) < N*N_new else N*N_new) for i in range(math.ceil(L/kwargs['segment'])))
+                capture_gen = ((kwargs['segment']*i, kwargs['segment']*(i+1) if kwargs['segment']*(i+1) < N*N_new else N*N_new) for i in range(math.ceil(L/kwargs['segment'])))
             else:
-                capture_gen = ((captures, 0, L) for _ in range(1))
+                capture_gen = ((0, L) for _ in range(1))
 
             # generate results for the consumer (effectively limits processing burden by splitting long sequence into manageable independent overlapping chunks)
-            for (segment, start, end) in capture_gen:
+            for (start, end) in capture_gen:
                 # make predictions and compute the loss
                 # forward pass the minibatch through the model for the corresponding subject
                 # the input tensor has shape (N, V, C, L): N-batch, V-nodes, C-channels, L-length
                 # the output tensor has shape (N, C', L)
-                predictions = self.model(Variable(segment, requires_grad=True))
+                predictions = self.model(Variable(captures[start-1 if start > 0 else start:end], requires_grad=True))
 
                 if kwargs['dataset_type'] == 'dir':
                     C_new = predictions.size(1)
                     if kwargs['model'] == 'original':
                         # arrange tensor back into a time series
-                        predictions = predictions.view(N, end-start, C_new)
+                        predictions = predictions.view(N, end-start+1 if start > 0 else end-start, C_new)
                         predictions = predictions.permute(0, 2, 1)
                     else:
                         # clear the overlapping Gamma-1 predictions at the start of each segment (except the very first segment), since 
@@ -297,7 +297,7 @@ class Processor:
                 # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
                 # CE guides model toward absolute correctness on single frame predictions,
                 # MSE component punishes large variations in class probabilities between consecutive samples
-                ce = self.ce(predictions, labels[:,start:end])
+                ce = self.ce(predictions[:,:,1 if start > 0 else 0:], labels[:,start:end])
                 # In the reduced temporal resolution setting of the original model, MSE loss is expected to be large the higher
                 # the receptive field since after that many frames a human could start performing a drastically diferent action
                 mse = 0.15 * torch.mean(
@@ -314,7 +314,7 @@ class Processor:
 
                 # calculate the predictions statistics
                 # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
-                top5_probs, top5_predicted = torch.topk(F.softmax(predictions, dim=1), k=5, dim=1)
+                top5_probs, top5_predicted = torch.topk(F.softmax(predictions[:,:,1 if start > 0 else 0:], dim=1), k=5, dim=1)
                 top1_predicted = top5_predicted[:,0,:]
                 # top5_probs[0,:,torch.bitwise_and(torch.any(top5_predicted == labels[:,None,:], dim=1), top1_predicted != labels)[0]].permute(1,0) # probabilities of classes where top-1 and top-5 don't intersect
                 top1_cor = torch.sum(top1_predicted == labels[:,start:end]).data.item()
@@ -374,6 +374,12 @@ class Processor:
 
                     # if the minibatch is smaller than requested (last minibatch)
                     loss /= (len(dataloader) % kwargs['batch_size'])
+
+                print(
+                    "[trial {0}]: ce = {1}, mse = {2}, loss = {3}, ce_epoch = {4}, mse_epoch = {5}"
+                    .format(i, ce, mse, loss, ce_epoch_loss_train, mse_epoch_loss_train),
+                    flush=True,
+                    file=kwargs['log'][0])
 
                 # backward pass to compute the gradients
                 loss.backward()
