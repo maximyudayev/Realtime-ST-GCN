@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import DataLoader
 from data_prep.dataset import SkeletonDataset, SkeletonDatasetFromDirectory
 from models.proposed.st_gcn import Stgcn
+from models.proposed.st_gcn import AggregateStgcn, ObservedAggregateStgcn, QAggregateStgcn
 from models.adapted.st_gcn import Model as AdaptedStgcn
 from models.original.st_gcn import Model as OriginalStgcn
 from processor import Processor
@@ -265,16 +266,29 @@ def test(args):
 def benchmark(args):
     """Entry point for benchmarking inference of a model.
 
-    TODO: allow automated test of multiple models.
-
     Args:
         args : ``dict``
             Parsed CLI arguments.
     """
 
     # perform common setup around the model's black box
+    # TODO: add entries for original ST-GCN modules
     args.graph, actions, device, _, val_dataloader, save_dir, args.jobname = common(args)
     args.num_classes = len(actions)
+    args.prepare_dict = {
+        "float_to_observed_custom_module_class": {
+            # "static": {
+                AggregateStgcn: ObservedAggregateStgcn,
+            # }
+        }
+    }
+    args.convert_dict = {
+        "observed_to_quantized_custom_module_class": {
+            # "static": {
+                ObservedAggregateStgcn: QAggregateStgcn,
+            # }
+        }
+    }
 
     # construct the target model using the CLI arguments
     model = build_model(args)
@@ -282,7 +296,7 @@ def benchmark(args):
     if args.checkpoint:
         # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
         model.load_state_dict({
-            k.split('module.')[1]: v
+            (k.split('module.')[1] if k.split('.')[1] != 'edge_importance' else 'st_gcn.{0}.edge_importance'.format(k.split('.')[2])): v
             for k, v in
             torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
@@ -298,6 +312,31 @@ def benchmark(args):
     trainer.benchmark(save_dir, val_dataloader, device, **vars(args))
 
     print("Benchmarking completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
+
+    if args.backup:
+        backup_dir = "{0}/{1}".format(
+            args.backup,
+            '/'.join(save_dir.split('/')[-2:]))
+
+        if not os.path.exists(backup_dir):
+            os.makedirs(backup_dir)
+
+        for f in [
+            'accuracy.csv',
+            'loss.csv',
+            'macro-F1@k.csv',
+            'edit.csv',
+            'latency.csv',
+            'model-size.csv',
+            'confusion-matrix_fp32.csv',
+            'confusion-matrix_int8.csv',
+            'segmentation-175_fp32.csv',
+            'segmentation-293_fp32.csv',
+            'segmentation-37_fp32.csv',
+            'segmentation-175_int8.csv',
+            'segmentation-293_int8.csv',
+            'segmentation-37_int8.csv']:
+            os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
 
     os.system(
         'mail -s "[{0}]: COMPLETED" {1} <<< ""'
@@ -816,7 +855,6 @@ if __name__ == '__main__':
         help='level of log detail (default: 0)')
 
     # benchmark command parser
-    # TODO: complete the benchmark to allow automated comparison between multiple models
     parser_benchmark = subparsers.add_parser(
         'benchmark',
         usage="""%(prog)s\n\t[-h]
@@ -839,6 +877,7 @@ if __name__ == '__main__':
             \r\t[--dropout [DROPOUT,[...]]]
             \r\t[--iou_threshold [THRESHOLDS]]
             \r\t[--graph FILE]
+            \r\t[--backend ARCH {x86|qnnpack}]
 
             \r\t[--data DATA_DIR]
             \r\t[--dataset_type TYPE]
@@ -848,7 +887,7 @@ if __name__ == '__main__':
             \r\t[--log O_FILE E_FILE]
             \r\t[--email EMAIL]
             \r\t[-v[vv]]""",
-        help='benchmark target ST-GCN network against baseline(s)',
+        help='benchmark target ST-GCN network (accuracy, scores, latency).',
         epilog='TODO: add the epilog')
 
     parser_benchmark_model = parser_benchmark.add_argument_group(
@@ -992,6 +1031,13 @@ if __name__ == '__main__':
         metavar='',
         help='path to the skeleton graph specification file '
             '(default: data/skeletons/openpose.json)')
+    parser_benchmark_model.add_argument(
+        '--backend',
+        choices=['x86','qnnpack'],
+        type=str,
+        default='x86',
+        metavar='',
+        help='quantization backend (default: x86)')
     # IO arguments
     parser_benchmark_io.add_argument(
         '--data',

@@ -7,8 +7,7 @@ import pandas as pd
 import time
 import os
 from torch.autograd import Variable
-import cProfile, pstats
-from pstats import SortKey
+
 
 class Processor:
     """ST-GCN processing wrapper for training and testing the model.
@@ -51,6 +50,14 @@ class Processor:
         self.ce = nn.CrossEntropyLoss(weight=(1-class_dist/torch.sum(class_dist)).to(device=device), reduction='mean')
         self.mse = nn.MSELoss(reduction='none')
         self.num_classes = num_classes
+
+
+    def model_size(self, save_dir):
+        temp_file = "{0}/temp.pt".format(save_dir)
+        torch.save({"model_state_dict": self.model.state_dict()}, temp_file)
+        size = os.path.getsize(temp_file)/1e6
+        os.remove(temp_file)
+        return size
 
 
     def update_lr_(self, learning_rate, learning_rate_decay, epoch):
@@ -321,9 +328,156 @@ class Processor:
                 top5_cor = torch.sum(top5_predicted == labels[:,None,start:end]).data.item()
                 tot = labels[:,start:end].numel()
 
-                yield top1_predicted, top5_predicted, labels[:,start:end], top1_cor, top5_cor, tot, ce, mse
+                yield top1_predicted, top5_predicted, labels[:,start:end], top1_cor, top5_cor, tot, ce, mse, None
         else:
             raise NotImplementedError('Did not provide a safe `forward_` implementation for file-based dataset types since #93df7ae')
+
+
+    def forward_rt_(
+        self,
+        captures,
+        labels,
+        device=None,
+        **kwargs):
+        """Generator that does the continual forward pass on the inference-only model.
+
+        """
+
+        # move both data to the compute device
+        # (captures is a batch of full-length captures, label is a batch of ground truths)
+        captures, labels = captures.to(device), labels.to(device)
+
+        N, _, L, _ = captures.size()
+
+        latency = 0
+        predictions = torch.zeros(N, self.num_classes, L, dtype=captures.dtype, device=device)
+
+        # Splits trial into overlapping subsequences of samples
+        if kwargs['dataset_type'] == 'dir': 
+            # Splits trial for `original` model into overlapping subsequences of samples to separately feed into the model
+            if kwargs['model'] == 'original':
+                # zero pad the input across time from start by the receptive field size
+                # TODO: provide case for different amount of overlap
+                captures = F.pad(captures, (0, 0, kwargs['receptive_field']-1, 0))
+                capture_gen = ((i,i+kwargs['receptive_field']) for i in range(L))
+            else:
+                capture_gen = ((i,i+1) for i in range(L))
+
+            # generate results for the consumer (effectively limits processing burden by splitting long sequence into manageable independent overlapping chunks)
+            for i, (start, end) in enumerate(capture_gen):
+                start_time = time.time()
+                predictions[:,:,i:i+1] = self.model(captures[:,:,start:end])
+                latency += (time.time() - start_time)
+
+            # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
+            # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
+            # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
+            # CE guides model toward absolute correctness on single frame predictions,
+            # MSE component punishes large variations in class probabilities between consecutive samples
+            ce = self.ce(predictions, labels)
+            # In the reduced temporal resolution setting of the original model, MSE loss is expected to be large the higher
+            # the receptive field since after that many frames a human could start performing a drastically diferent action
+            mse = 0.15 * torch.mean(
+                torch.clamp(
+                    self.mse(
+                        F.log_softmax(predictions[:,:,1:], dim=1), 
+                        F.log_softmax(predictions.detach()[:,:,:-1], dim=1)),
+                    min=0,
+                    max=16))
+
+            # calculate the predictions statistics
+            # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
+            top5_probs, top5_predicted = torch.topk(F.softmax(predictions, dim=1), k=5, dim=1)
+            top1_predicted = top5_predicted[:,0,:]
+            # top5_probs[0,:,torch.bitwise_and(torch.any(top5_predicted == labels[:,None,:], dim=1), top1_predicted != labels)[0]].permute(1,0) # probabilities of classes where top-1 and top-5 don't intersect
+            top1_cor = torch.sum(top1_predicted == labels).data.item()
+            top5_cor = torch.sum(top5_predicted == labels[:,None]).data.item()
+            tot = labels.numel()
+
+            yield top1_predicted, top5_predicted, labels, top1_cor, top5_cor, tot, ce, mse, latency/L
+        else:
+            raise NotImplementedError('Did not provide a safe `forward_rt_` implementation for file-based dataset types since #cc77c393')
+
+
+    def validate_(
+        self,
+        dataloader,
+        foo,
+        device=None,
+        num_samples=None,
+        **kwargs):
+        """Does a forward pass without recording gradients. 
+
+        Shared between train and test scripts: train invokes it after each epoch trained,
+        test invokes it once for inference only.
+        """
+
+        # do not record gradients
+        with torch.no_grad():    
+            top1_correct = 0
+            top5_correct = 0
+            total = 0
+
+            test_start_time = time.time()
+
+            ce_epoch_loss_val = 0
+            mse_epoch_loss_val = 0
+
+            latency = 0
+
+            # stats for F1@k segmentation-detection metric of Lea, et al. (2016)
+            threshold = torch.tensor(kwargs['iou_threshold'], device=device, dtype=torch.float32)
+            f1 = torch.zeros(len(dataloader), threshold.size(0), device=device, dtype=torch.float32)
+
+            # stats for segmental edit score
+            edit_score = 0
+
+            # stats for the framewise confusion matrix
+            confusion_matrix = torch.zeros(self.num_classes, self.num_classes, device=device, dtype=torch.int64)
+
+            # sweep through the validation dataset in minibatches
+            # calculate IoU for the F1@k metrics
+            # NOTE: (assumes N=1)
+            for k, (captures, labels) in enumerate(dataloader):
+                # don't loop through entire dataset - useful to calibrate quantized model or to get the latency metric
+                if k == num_samples: break
+                
+                top1_predicted = []
+                for segment_top1_predicted, _, segment_labels, top1_cor, top5_cor, tot, ce, mse, lat in foo(captures, labels, device, **kwargs):
+                    N, _ = segment_labels.size()
+
+                    # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
+                    # which will then be averaged across the entire dataset size, since
+                    # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
+                    # (used for statistics)
+                    ce_epoch_loss_val += (ce*N).data.item()
+                    mse_epoch_loss_val += (mse*N).data.item()
+
+                    # evaluate the model
+                    top1_correct += top1_cor
+                    top5_correct += top5_cor
+                    total += tot
+                    top1_predicted.append(segment_top1_predicted)
+                
+                latency += lat if lat else 0
+
+                top1 = torch.concat(top1_predicted, dim=1)
+                labels = labels.to(device)
+                
+                f1[k] = self.f1_score(threshold, labels, top1, device=device)
+                edit_score += self.edit_score(labels, top1, device=device)
+                confusion_matrix += self.confusion_matrix(labels, top1, device=device)
+
+            test_end_time = time.time()
+            duration = test_end_time - test_start_time
+
+            top1_acc = top1_correct / total
+            top5_acc = top5_correct / total
+            # discard NaN F1 values and compute the macro F1-score (average)
+            F1 = f1.nan_to_num(0).mean(dim=0)
+            edit_score /= k
+
+        return top1_acc, top5_acc, F1, edit_score, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val, latency/k if latency else duration
 
 
     def train_(
@@ -346,7 +500,7 @@ class Processor:
             N, _, _, _ = captures.size()
 
             # generator that returns lazy iterator over segments of the trial to process long sequence in manageable overlapping chunks to fit in memory
-            for _, _, _, top1_cor, top5_cor, tot, ce, mse in self.forward_(captures, labels, device, **kwargs):
+            for _, _, _, top1_cor, top5_cor, tot, ce, mse, _ in self.forward_(captures, labels, device, **kwargs):
                 top1_correct += top1_cor
                 top5_correct += top5_cor
                 total += tot
@@ -399,78 +553,6 @@ class Processor:
                 self.optimizer.zero_grad()
 
         return top1_correct, top5_correct, total, ce_epoch_loss_train, mse_epoch_loss_train
-
-
-    def validate_(
-        self,
-        dataloader,
-        device=None,
-        **kwargs):
-        """Does a forward pass without recording gradients. 
-
-        Shared between train and test scripts: train invokes it after each epoch trained,
-        test invokes it once for inference only.
-        """
-
-        # do not record gradients
-        with torch.no_grad():    
-            top1_correct = 0
-            top5_correct = 0
-            total = 0
-
-            test_start_time = time.time()
-
-            ce_epoch_loss_val = 0
-            mse_epoch_loss_val = 0
-
-            # stats for F1@k segmentation-detection metric of Lea, et al. (2016)
-            threshold = torch.tensor(kwargs['iou_threshold'], device=device, dtype=torch.float32)
-            f1 = torch.zeros(len(dataloader), threshold.size(0), device=device, dtype=torch.float32)
-
-            # stats for segmental edit score
-            edit_score = 0
-
-            # stats for the framewise confusion matrix
-            confusion_matrix = torch.zeros(self.num_classes, self.num_classes, device=device, dtype=torch.int64)
-
-            # sweep through the validation dataset in minibatches
-            # calculate IoU for the F1@k metrics
-            # NOTE: (assumes N=1)
-            for k, (captures, labels) in enumerate(dataloader):
-                top1_predicted = []
-                for segment_top1_predicted, _, segment_labels, top1_cor, top5_cor, tot, ce, mse in self.forward_(captures, labels, device, **kwargs):
-                    N, _ = segment_labels.size()
-
-                    # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
-                    # which will then be averaged across the entire dataset size, since
-                    # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
-                    # (used for statistics)
-                    ce_epoch_loss_val += (ce*N).data.item()
-                    mse_epoch_loss_val += (mse*N).data.item()
-
-                    # evaluate the model
-                    top1_correct += top1_cor
-                    top5_correct += top5_cor
-                    total += tot
-                    top1_predicted.append(segment_top1_predicted)
-                
-                top1 = torch.concat(top1_predicted, dim=1)
-                labels = labels.to(device)
-                
-                f1[k] = self.f1_score(threshold, labels, top1, device=device)
-                edit_score += self.edit_score(labels, top1, device=device)
-                confusion_matrix += self.confusion_matrix(labels, top1, device=device)
-
-            test_end_time = time.time()
-            duration = test_end_time - test_start_time
-
-            top1_acc = top1_correct / total
-            top5_acc = top5_correct / total
-            # discard NaN F1 values and compute the macro F1-score (average)
-            F1 = f1.nan_to_num(0).mean(dim=0)
-            edit_score /= len(dataloader)
-
-        return top1_acc, top5_acc, F1, edit_score, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val, duration
 
 
     def train(
@@ -565,6 +647,7 @@ class Processor:
             # corresponding caller function
             top1_acc_val, top5_acc_val, f1_score, edit_score, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val, duration_val = self.validate_(
                 dataloader=val_dataloader,
+                foo=self.forward_,
                 device=device,
                 **kwargs)
 
@@ -590,7 +673,7 @@ class Processor:
             pd.DataFrame(torch.stack((torch.tensor(kwargs['iou_threshold'],dtype=torch.float32),f1_score.cpu())).numpy()).to_csv('{0}/macro-F1@k.csv'.format(save_dir))
             pd.DataFrame(data={"top1": top1_acc_val, "top5": top5_acc_val}, index=[0]).to_csv('{0}/accuracy.csv'.format(save_dir))
             pd.DataFrame(data={"edit": edit_score.cpu().numpy()}, index=[0]).to_csv('{0}/edit.csv'.format(save_dir))
-            pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion_matrix.csv'.format(save_dir))
+            pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion-matrix.csv'.format(save_dir))
 
             # sweep through the sample trials
             for i in [175, 293, 37]: # 39 (L=4718), 177 (L=6973), 299 (L=2378)
@@ -602,7 +685,7 @@ class Processor:
                 captures, labels = captures[None].to(device), labels[None].to(device)
 
                 top1_predicted = []
-                for segment_top1_predicted, _, _, _, _, _, _, _ in self.forward_(captures, labels, device=device, **kwargs):
+                for segment_top1_predicted, _, _, _, _, _, _, _, _ in self.forward_(captures, labels, device=device, **kwargs):
                     top1_predicted.append(segment_top1_predicted)
 
                 pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}.csv'.format(save_dir, i))
@@ -706,6 +789,7 @@ class Processor:
         # test the model on the validation set
         top1_acc_val, top5_acc_val, f1_score, edit_score, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val, duration_val = self.validate_(
             dataloader=dataloader,
+            foo=self.forward_,
             device=device,
             **kwargs)
 
@@ -713,7 +797,7 @@ class Processor:
         pd.DataFrame(torch.stack((torch.tensor(kwargs['iou_threshold'],dtype=torch.float32),f1_score.cpu())).numpy()).to_csv('{0}/macro-F1@k.csv'.format(save_dir))
         pd.DataFrame(data={"top1": top1_acc_val, "top5": top5_acc_val}, index=[0]).to_csv('{0}/accuracy.csv'.format(save_dir))
         pd.DataFrame(data={"edit": edit_score.cpu().numpy()}, index=[0]).to_csv('{0}/edit.csv'.format(save_dir))
-        pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion_matrix.csv'.format(save_dir))
+        pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion-matrix.csv'.format(save_dir))
 
         # sweep through the sample trials
         for i in [175, 293, 37]: # 39 (L=4718), 177 (L=6973), 299 (L=2378)
@@ -725,7 +809,7 @@ class Processor:
             captures, labels = captures[None].to(device), labels[None].to(device)
 
             top1_predicted = []
-            for segment_top1_predicted, _, _, _, _, _, _, _ in self.forward_(captures, labels, device=device, **kwargs):
+            for segment_top1_predicted, _, _, _, _, _, _, _, _ in self.forward_(captures, labels, device=device, **kwargs):
                 top1_predicted.append(segment_top1_predicted)
 
             pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}.csv'.format(save_dir, i))
@@ -775,82 +859,133 @@ class Processor:
         dataloader,
         device,
         **kwargs):
-        """Benchmarks realtime inference for a model.
+        """Benchmarks FP32 and INT8 (PTSQ) performance of a model.
 
         NOTE: currently only supports `original` and `realtime` on `dir` dataset types.
         """
 
+        # replace trainable layers of the proposed model with quantizeable inference-only version
+        # TODO: extend to the original ST-GCN
         if kwargs['model'] == 'realtime':
             self.model._swap_layers_for_inference()
-
-        # set layers to inference mode if behavior differs between train and prediction
-        # (prepares Dropout and BatchNormalization layers to enable and to freeze parameters, respectively)
+            self.model.eval_()
         self.model.eval()
+        
+        # measure FP32 latency on CPU
+        _, _, _, _, _, _, _, latency_fp32 = self.validate_(
+            dataloader=dataloader,
+            foo=self.forward_rt_,
+            device="cpu",
+            num_samples=1,
+            **kwargs)
 
-        # do not record gradients
-        with torch.no_grad():
-            latency = 0
+        size_fp32 = self.model_size(save_dir)
 
-            # sweep through the training dataset in minibatches
-            for i, (captures, labels) in enumerate(dataloader):
-                # move both data to the compute device
-                # (captures is a batch of full-length captures, label is a batch of ground truths)
-                captures, labels = captures.to(device), labels.to(device)
+        print(
+            "[benchmark FP32]: {0} spf"
+            .format(latency_fp32),
+            flush=True,
+            file=kwargs['log'][0])
 
-                N, _, L, _ = captures.size()
-                lat = 0
+        # TODO: remove IOTextWrapper object from kwargs as 'log' parameter specifier: cannot serialize the object during model conversion to quantized
+        del self.model.conf['log']
 
-                # Splits trial for `original` model into overlapping subsequences of samples to separately feed into the model
-                if kwargs['model'] == 'original':
-                    # zero pad the input across time from start by the receptive field size
-                    captures = F.pad(captures, (0, 0, kwargs['receptive_field']-1, 0))
-                    stride = kwargs['receptive_field'] if kwargs['latency'] else 1
-                    captures = captures.unfold(2, kwargs['receptive_field'], stride)
-                    labels = labels[:, ::stride]
+        # prepare the FP32 model: attaches observers to all layers, including the custom layer
+        self.model.qconfig = torch.ao.quantization.get_default_qconfig(kwargs['backend'])
+        self.model = torch.ao.quantization.prepare(self.model, prepare_custom_config_dict=kwargs['prepare_dict'])
 
-                    N, C, N_new, V, T_new = captures.size()
-                    # (N,C,N',V,T') -> batches of unfolded slices
-                    # .contiguous() is needed before .view(), but also after .unfold() to operate on same data element 
-                    # in the overlapping segments. Otherwise two segments will update the same memory location, leaking data.
-                    # No need to .clone() the sliced view of the tensor after .contiguous()
-                    captures = captures.permute(0, 2, 1, 4, 3).contiguous()
-                    captures = captures.view(N * N_new, C, T_new, V)
-                    # (N'',C,T',V)
+        # move the model to the compute device(s) if available (CPU, GPU, TPU, etc.)
+        if torch.cuda.device_count() > 1:
+            print("Using", torch.cuda.device_count(), "allocated GPUs", flush=True, file=kwargs['log'][0])
+            self.model = nn.DataParallel(self.model)
+        self.model.to(device)
+        self.model.eval()
+        
+        # calibrate the observed model (must be done on the same device as training)
+        top1_acc_cal, top5_acc_cal, f1_score_cal, edit_score_cal, confusion_matrix_cal, ce_epoch_loss_cal, mse_epoch_loss_cal, _ = self.validate_(
+            dataloader=dataloader,
+            foo=self.forward_rt_,
+            device=device,
+            num_samples=1,
+            **kwargs)
 
-                    with cProfile.Profile() as pr:
-                        for j in range(N_new):
-                            start = time.time()
+        # # sweep through the sample trials
+        # for i in [175, 293, 37]: # 39 (L=4718), 177 (L=6973), 299 (L=2378)
+        #     # save prediction and ground truth of reference samples
+        #     captures, labels = dataloader.dataset.__getitem__(i)
 
-                            # the input tensor has shape (N, V, C, L): N-batch, V-nodes, C-channels, L-length
-                            # the output tensor has shape (N, C', L)
-                            self.model(captures[j:j+1])
+        #     # move both data to the compute device
+        #     # (captures is a batch of full-length captures, label is a batch of ground truths)
+        #     captures, labels = captures[None].to(device), labels[None].to(device)
 
-                            lat += (time.time() - start)
+        #     top1_predicted = []
+        #     for segment_top1_predicted, _, _, _, _, _, _, _, _ in self.forward_rt_(captures, labels, device=device, **kwargs):
+        #         top1_predicted.append(segment_top1_predicted)
 
-                        pstats.Stats(pr).sort_stats(SortKey.TIME).print_stats()
+        #     pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}_fp32.csv'.format(save_dir, i))
 
-                    latency += lat / N_new
-                else:
-                    with cProfile.Profile() as pr:
-                        for j in range(L):
-                            start = time.time()
+        # move the model to the CPU for INT8 inference
+        self.model.to("cpu")
 
-                            # the input tensor has shape (N, V, C, L): N-batch, V-nodes, C-channels, L-length
-                            # the output tensor has shape (N, C', L)
-                            self.model(captures[:,:,j:j+1,:])
+        # quantize the calibrated model
+        self.model = torch.ao.quantization.convert(self.model, convert_custom_config_dict=kwargs['convert_dict'])
+        self.model.eval()
+        # evaluate performance of the PTSQ model (must be done on the same device as training)
+        top1_acc_q, top5_acc_q, f1_score_q, edit_score_q, confusion_matrix_q, ce_epoch_loss_q, mse_epoch_loss_q, latency_int8 = self.validate_(
+            dataloader=dataloader,
+            foo=self.forward_rt_,
+            device="cpu",
+            num_samples=1,
+            **kwargs)
 
-                            lat += (time.time() - start)
+        # measure INT8 latency
+        size_int8 = self.model_size(save_dir)
 
-                        pstats.Stats(pr).sort_stats(SortKey.TIME).print_stats()
+        print(
+            "[benchmark INT8]: {0} spf"
+            .format(latency_int8),
+            flush=True,
+            file=kwargs['log'][0])
 
-                    latency += lat / L
+        # # sweep through the sample trials
+        # for i in [175, 293, 37]: # 39 (L=4718), 177 (L=6973), 299 (L=2378)
+        #     # save prediction and ground truth of reference samples
+        #     captures, labels = dataloader.dataset.__getitem__(i)
 
-                break
+        #     # move both data to the compute device
+        #     # (captures is a batch of full-length captures, label is a batch of ground truths)
+        #     captures, labels = captures[None].to("cpu"), labels[None].to("cpu")
 
-            print(
-                "[benchmark]: {0} spf"
-                .format(latency/(i+1)),
-                flush=True,
-                file=kwargs['log'][0])
+        #     top1_predicted = []
+        #     for segment_top1_predicted, _, _, _, _, _, _, _, _ in self.forward_rt_(captures, labels, device="cpu", **kwargs):
+        #         top1_predicted.append(segment_top1_predicted)
+
+        #     pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}_int8.csv'.format(save_dir, i))
+
+        # save all the measurements
+        pd.DataFrame(
+            data={
+                'top1_fp32': top1_acc_cal,
+                'top1_int8': top1_acc_q,
+                'top5_fp32': top5_acc_cal,
+                'top5_int8': top5_acc_q
+            },
+            index=[0]).to_csv('{0}/accuracy.csv'.format(save_dir))
+
+        pd.DataFrame(
+            data={
+                'ce_fp32': ce_epoch_loss_cal,
+                'mse_fp32': mse_epoch_loss_cal,
+                'ce_int8': ce_epoch_loss_q,
+                'mse_int8': mse_epoch_loss_q,
+            },
+            index=[0]).to_csv('{0}/loss.csv'.format(save_dir))
+
+        pd.DataFrame(torch.stack((torch.tensor(kwargs['iou_threshold'],dtype=torch.float32),f1_score_cal.cpu(),f1_score_q.cpu())).numpy()).to_csv('{0}/macro-F1@k.csv'.format(save_dir))
+        pd.DataFrame(data={"edit_fp32": edit_score_cal.cpu().numpy(), "edit_int8": edit_score_q.cpu().numpy()},index=[0]).to_csv('{0}/edit.csv'.format(save_dir))
+        pd.DataFrame(data={"latency_fp32": latency_fp32, "latency_int8": latency_int8},index=[0]).to_csv('{0}/latency.csv'.format(save_dir))
+        pd.DataFrame(data={"size_fp32": size_fp32, "size_int8": size_int8},index=[0]).to_csv('{0}/model-size.csv'.format(save_dir))
+        pd.DataFrame(confusion_matrix_cal.cpu().numpy()).to_csv('{0}/confusion-matrix_fp32.csv'.format(save_dir))
+        pd.DataFrame(confusion_matrix_q.cpu().numpy()).to_csv('{0}/confusion-matrix_int8.csv'.format(save_dir))
 
         return

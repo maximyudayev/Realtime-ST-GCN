@@ -4,11 +4,12 @@ import numpy as np
 
 
 def plot_confusion_matrix_rt():
-    with open('pretrained_models/pku-mmdv1/realtime/benchmark_9_29-03-23_15:58:22/confusion_matrix.csv','r') as f:
+    with open('pretrained_models/pku-mmdv1/realtime/train_9_64_50/confusion_matrix.csv','r') as f:
         confusion_matrix = np.genfromtxt(f, delimiter=',', dtype=np.int32)[1:,1:]
 
     plt.subplots()
     plt.imshow(confusion_matrix, cmap='magma', interpolation='nearest', norm=colors.LogNorm(vmin=1, vmax=confusion_matrix.max(), clip=True))
+    # plt.imshow(confusion_matrix, cmap='magma', interpolation='nearest')
     plt.colorbar()
     plt.axis('off')
     plt.tight_layout()
@@ -21,11 +22,14 @@ def plot_segmentation_masks():
     trials = [37, 175, 293]
     letters = ['a)','b)','c)']
     paths = [
-        'pretrained_models/pku-mmdv1/realtime/benchmark_9_29-03-23_15:58:22',
-        'pretrained_models/pku-mmdv1/realtime/benchmark_21_29-03-23_16:05:44',
-        'pretrained_models/pku-mmdv1/realtime/benchmark_69_29-03-23_16:11:22',
-        'pretrained_models/pku-mmdv1/realtime/benchmark_153_29-03-23_16:16:28',
-        'pretrained_models/pku-mmdv1/realtime/benchmark_299_29-03-23_16:21:21']
+        'pretrained_models/pku-mmdv1/realtime/train_9_64_50',
+        'pretrained_models/pku-mmdv1/realtime/train_21_64_50',
+        'pretrained_models/pku-mmdv1/realtime/train_69_64_50',
+        'pretrained_models/pku-mmdv1/realtime/train_153_64_50',
+        'pretrained_models/pku-mmdv1/realtime/train_299_64_50',
+        'pretrained_models/pku-mmdv1/original/train_9_50_64_50',
+        'pretrained_models/pku-mmdv1/original/train_21_50_64_50',
+        'pretrained_models/pku-mmdv1/original/train_69_50_64_50',]
 
     for i in range(len(trials)):
         with open('{0}/segmentation-{1}.csv'.format(paths[0],trials[i]),'r') as f:
@@ -39,10 +43,21 @@ def plot_segmentation_masks():
             mask_prediction = np.concatenate((mask_prediction, np.array(lines[2].split(',')[1:], dtype=np.int32, ndmin=2)), axis=0)
 
         mask_label = np.array(lines[1].split(',')[1:], dtype=np.int32, ndmin=2)
+        
+        labels = [
+            'Ground Truth',
+            'RT-ST-GCN$_{\Gamma=9}$',
+            'RT-ST-GCN$_{\Gamma=21}$',
+            'RT-ST-GCN$_{\Gamma=69}$',
+            'RT-ST-GCN$_{\Gamma=153}$',
+            'RT-ST-GCN$_{\Gamma=299}$',
+            'ST-GCN$_{W=50,\Gamma=9}$',
+            'ST-GCN$_{W=50,\Gamma=21}$',
+            'ST-GCN$_{W=50,\Gamma=69}$']
 
         axs[i].imshow(np.concatenate((mask_label, mask_prediction), axis=0), cmap='terrain_r', vmin=0.0, vmax=51.0, aspect='auto', interpolation='nearest')
         axs[i].set_ylabel(letters[i], rotation=0, fontsize='xx-large', fontweight='bold')
-        axs[i].set_yticks([0.0, 1.0, 2.0, 3.0, 4.0, 5.0], labels=['Ground Truth','RT-ST-GCN$_{\Gamma=9}$','RT-ST-GCN$_{\Gamma=21}$','RT-ST-GCN$_{\Gamma=69}$','RT-ST-GCN$_{\Gamma=153}$','RT-ST-GCN$_{\Gamma=299}$'], fontsize='x-large')
+        axs[i].set_yticks([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], labels=labels, fontsize='x-large')
         axs[i].tick_params(length=0.0)
         axs[i].set_frame_on(False)
 
@@ -70,24 +85,51 @@ def get_color_gradient(c1, c2, n):
 
 
 def plot_accuracy_gap():
-    # TODO: read actual data
+    paths = [
+        'pretrained_models/pku-mmdv1/realtime/train_9_64_50',
+        'pretrained_models/pku-mmdv1/realtime/train_21_64_50',
+        'pretrained_models/pku-mmdv1/realtime/train_69_64_50',
+        'pretrained_models/pku-mmdv1/realtime/train_153_64_50',
+        'pretrained_models/pku-mmdv1/realtime/train_299_64_50',
+        'pretrained_models/pku-mmdv1/original/train_9_50_64_50',
+        'pretrained_models/pku-mmdv1/original/train_21_50_64_50',
+        'pretrained_models/pku-mmdv1/original/train_69_50_64_50',]
+
     x = np.arange(0, 51)
-    labels = ['RT-ST-GCN$_{\Gamma=9}$','RT-ST-GCN$_{\Gamma=21}$','RT-ST-GCN$_{\Gamma=69}$','RT-ST-GCN$_{\Gamma=153}$','RT-ST-GCN$_{\Gamma=299}$']
+    labels = [
+        'RT-ST-GCN$_{\Gamma=9}$',
+        'RT-ST-GCN$_{\Gamma=21}$',
+        'RT-ST-GCN$_{\Gamma=69}$',
+        'RT-ST-GCN$_{\Gamma=153}$',
+        'RT-ST-GCN$_{\Gamma=299}$',
+        'ST-GCN$_{W=50,\Gamma=9}$',
+        'ST-GCN$_{W=50,\Gamma=21}$',
+        'ST-GCN$_{W=50,\Gamma=69}$']
 
     colors = get_color_gradient("#8A5AC2", "#3575D5", len(labels))
 
     fig = plt.figure()
-    gs = fig.add_gridspec(5, hspace=0)
+    gs = fig.add_gridspec(len(paths), hspace=0)
     axs = gs.subplots(sharex=True, sharey=True)
 
     for i in range(len(axs)):
-        axs[i].stairs((10*(len(labels)-i)*np.power(x[1:],-0.5)).astype(int),x,fill=True,color=colors[i])
+        with open('{0}/train-validation-curve.csv'.format(paths[i]),'r') as f:
+        # with open('{0}/accuracy-curve.csv'.format(paths[i]),'r') as f:
+            y = np.genfromtxt(f, delimiter=',', dtype=np.float32)[1:,1:]
+
+        axs[i].stairs(np.abs(y[::-1,:2].sum(axis=1)-y[::-1,2:].sum(axis=1)),x,fill=True,color=colors[i])
+        # axs[i].stairs(np.abs(y[::-1,0]-y[::-1,1]),x,fill=True,color=colors[i])
         axs[i].label_outer()
         axs[i].set_frame_on(False)
-        axs[i].set_ylabel(labels[i],fontsize='large',)
+        axs[i].set_ylabel(labels[i],fontsize='large',rotation=0)
+        # axs[i].set_yticks([0,0.1,0.2])
+        axs[i].yaxis.set_label_coords(-.2,.3)
         axs[i].margins(x=0)
 
     fig.tight_layout()
     plt.show()
 
+
 plot_accuracy_gap()
+# plot_confusion_matrix_rt()
+# plot_segmentation_masks()

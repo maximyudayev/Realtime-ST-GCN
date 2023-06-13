@@ -2,18 +2,18 @@ import torch
 import torch.nn.functional as F
 
 # Test dimensions
-N = 2
+N = 1
 P = 3
-V = 5
-C = 6
-S = 2
+V = 25
+C = 64
+S = 1
 K = 9
-L = 300
+L = 1
 G = S*(K-1)+1
 D = int(V*(1+V)/2)
 
 # FIFO for internal logic
-fifo = torch.zeros(N,G,P,C,V,dtype=torch.int64)
+fifo = torch.zeros(N,G,C,V,dtype=torch.int64)
 
 # Makes P V-by-V symmetric adjacency matrices
 A = torch.zeros(P,V,V,dtype=torch.int64)
@@ -52,14 +52,14 @@ e = torch.matmul(d,A)
 outputs = []
 for i in range(e.shape[1]):
     # push the frame into the FIFO
-    fifo = torch.cat((e[:,i:i+1], fifo[:,:G-1]), 1)
+    fifo = torch.cat((e.sum(dim=2)[:,i:i+1], fifo[:,:G-1]), 1)
     
     # slice the tensor according to the temporal stride size
     # (if stride is 1, returns the whole tensor itself)
     f = fifo[:,range(0, G, S)]
 
     # sum temporally and across partitions
-    g = torch.sum(f, dim=(1,2))
+    g = torch.sum(f, dim=(1))
     outputs.append(g)
 
 # stack frame-wise tensors into the original length L
@@ -67,17 +67,26 @@ for i in range(e.shape[1]):
 h = torch.stack(outputs, 2)
 
 # lower triangle matrix for temporal accumulation that mimics FIFO behavior
-lt_matrix = torch.zeros(L,L,dtype=torch.int64)
-for i in range(K):
-    lt_matrix += F.pad(torch.eye(L-S*i,dtype=torch.int64), (0,i*S,i*S,0))
-lt_matrix = torch.transpose(lt_matrix,0,1)
+# lt_matrix = torch.zeros(L,L,dtype=torch.int64)
+# for i in range(K):
+#     lt_matrix += F.pad(torch.eye(L-S*i,dtype=torch.int64), (0,i*S,i*S,0))
+# lt_matrix = torch.transpose(lt_matrix,0,1)
 
-f_new = torch.permute(e, (0,2,3,4,1))
-g_new = torch.matmul(f_new, lt_matrix)
-# sum across partitions (N,C,V,L)
-h_new = torch.sum(g_new, dim=(1))
-# match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V)
-i_new = torch.permute(h_new, (0,1,3,2))
+# f_new = torch.permute(e, (0,2,3,4,1))
+# g_new = torch.matmul(f_new, lt_matrix)
+# # sum across partitions (N,C,V,L)
+# h_new = torch.sum(g_new, dim=(1))
+# # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V)
+# i_new = torch.permute(h_new, (0,1,3,2))
 
-# compare the results of the 2 approaches (must yield identical results for integer arithmetic)
-assert(torch.equal(h, i_new))
+# # compare the results of the 2 approaches (must yield identical results for integer arithmetic)
+# assert(torch.equal(h, i_new))
+
+# a.view(N,1,C,P,L,V).permute(0,1,2,4,5,3).contiguous().view(N,1,C,L,V*P)
+
+a_temp = a.unfold(dimension=1,size=C,step=C)
+A_temp = A.permute(2,0,1)[:,:,None,:,None]
+
+temp = F.conv3d(a_temp, A_temp).permute(0,4,2,3,1)[:,:,0]
+
+assert(torch.equal(h, temp))
