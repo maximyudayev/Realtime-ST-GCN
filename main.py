@@ -277,16 +277,16 @@ def benchmark(args):
     args.num_classes = len(actions)
     args.prepare_dict = {
         "float_to_observed_custom_module_class": {
-            # "static": {
+            "static": {
                 AggregateStgcn: ObservedAggregateStgcn,
-            # }
+            }
         }
     }
     args.convert_dict = {
         "observed_to_quantized_custom_module_class": {
-            # "static": {
+            "static": {
                 ObservedAggregateStgcn: QAggregateStgcn,
-            # }
+            }
         }
     }
 

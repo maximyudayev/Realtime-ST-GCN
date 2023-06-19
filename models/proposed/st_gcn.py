@@ -157,7 +157,6 @@ class Stgcn(nn.Module):
 
 
     def forward(self, x):
-        x = self.quant(x)
         # data normalization
         N, C, T, V = x.size()
         # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
@@ -181,9 +180,11 @@ class Stgcn(nn.Module):
 
         # remap the feature vector to class predictions
         x = self.fcn_out(x)
-        x = x.squeeze(-1)
+        
         # removes the last dimension (node dimension) of size 1: (N,C,L,1) -> (N,C,L)
-        return self.dequant(x)
+        x = x.squeeze(-1)
+        
+        return x
 
     
     def _swap_layers_for_inference(self):
@@ -478,7 +479,8 @@ class RtStgcnLayer(nn.Module):
         # self.num_joints = num_joints
 
         fifo_size = stride*(kernel_size-1)+1
-        self.residual = residual
+        self.is_residual = residual
+        self.is_residual_noconv = residual and (in_channels == out_channels) and (stride == 1)
         
         # learnable edge importance weighting matrices (each layer, separate weighting)
         # just a placeholder for successful load_state_dict() from <StgcnLayer>._swap_layers_for_inference()
@@ -500,16 +502,16 @@ class RtStgcnLayer(nn.Module):
             nn.ReLU())
 
         # residual branch
-        if residual and (in_channels == out_channels) and (stride == 1):
-            self.residual = lambda x: x
-        elif residual:
+        if residual and not ((in_channels == out_channels) and (stride == 1)):
             self.residual = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
                 nn.BatchNorm2d(out_channels, track_running_stats=True))
+        else:
+            self.residual = nn.Identity()
 
         # functional quantizeable module for the addition of branches
-        if residual:
-            self.functional_add = nnq.FloatFunctional()
+        self.functional_add = nnq.FloatFunctional()
+        self.functional_mul_zero = nnq.FloatFunctional()
 
         # activation of branch sum
         # if no resnet connection, prevent ReLU from being applied twice
@@ -534,7 +536,9 @@ class RtStgcnLayer(nn.Module):
         of extra memory for storing intermediate results.
         """
         # residual branch
-        if self.residual:
+        if not self.is_residual:
+            res = self.functional_mul_zero.mul_scalar(x, 0.0)
+        else:
             res = self.residual(x)
         
         # spatial convolution of incoming frame (node-wise)
@@ -547,8 +551,7 @@ class RtStgcnLayer(nn.Module):
         x = self.bn_relu(x)
 
         # add the branches (main + residual), activate and dropout
-        if self.residual:
-            x = self.functional_add.add(x, res)
+        x = self.functional_add.add(x, res)
 
         return self.do(x)
 

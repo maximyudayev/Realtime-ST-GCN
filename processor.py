@@ -7,6 +7,7 @@ import pandas as pd
 import time
 import os
 from torch.autograd import Variable
+from torch.ao.quantization.quantize_fx import prepare_fx, convert_fx
 
 
 class Processor:
@@ -879,20 +880,20 @@ class Processor:
             num_samples=1,
             **kwargs)
 
-        size_fp32 = self.model_size(save_dir)
-
         print(
             "[benchmark FP32]: {0} spf"
             .format(latency_fp32),
             flush=True,
             file=kwargs['log'][0])
 
+        size_fp32 = self.model_size(save_dir)
+
         # TODO: remove IOTextWrapper object from kwargs as 'log' parameter specifier: cannot serialize the object during model conversion to quantized
         del self.model.conf['log']
 
         # prepare the FP32 model: attaches observers to all layers, including the custom layer
-        self.model.qconfig = torch.ao.quantization.get_default_qconfig(kwargs['backend'])
-        self.model = torch.ao.quantization.prepare(self.model, prepare_custom_config_dict=kwargs['prepare_dict'])
+        qconfig = torch.ao.quantization.get_default_qconfig_mapping(kwargs['backend'])
+        self.model = prepare_fx(self.model, qconfig_mapping=qconfig, example_inputs=torch.randn(1,3,1,25), prepare_custom_config=kwargs['prepare_dict'])
 
         # move the model to the compute device(s) if available (CPU, GPU, TPU, etc.)
         if torch.cuda.device_count() > 1:
@@ -928,9 +929,13 @@ class Processor:
         self.model.to("cpu")
 
         # quantize the calibrated model
-        self.model = torch.ao.quantization.convert(self.model, convert_custom_config_dict=kwargs['convert_dict'])
+        self.model = convert_fx(self.model, qconfig_mapping=qconfig, convert_custom_config=kwargs['convert_dict'])
         self.model.eval()
+
+        self.model = torch.jit.script(self.model)
+
         # evaluate performance of the PTSQ model (must be done on the same device as training)
+        # measure INT8 latency
         top1_acc_q, top5_acc_q, f1_score_q, edit_score_q, confusion_matrix_q, ce_epoch_loss_q, mse_epoch_loss_q, latency_int8 = self.validate_(
             dataloader=dataloader,
             foo=self.forward_rt_,
@@ -938,14 +943,13 @@ class Processor:
             num_samples=1,
             **kwargs)
 
-        # measure INT8 latency
-        size_int8 = self.model_size(save_dir)
-
         print(
             "[benchmark INT8]: {0} spf"
             .format(latency_int8),
             flush=True,
             file=kwargs['log'][0])
+
+        size_int8 = self.model_size(save_dir)
 
         # # sweep through the sample trials
         # for i in [175, 293, 37]: # 39 (L=4718), 177 (L=6973), 299 (L=2378)
