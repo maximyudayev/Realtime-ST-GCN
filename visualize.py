@@ -19,8 +19,9 @@ def plot_confusion_matrix_rt():
 def plot_segmentation_masks():
     fig, axs = plt.subplots(3)
 
-    trials = [37, 175, 293]
-    letters = ['a)','b)','c)']
+    trials = [37]
+    # trials = [37, 175, 293]
+    # letters = ['a)','b)','c)']
     paths = [
         'pretrained_models/pku-mmdv1/realtime/train_9_64_50',
         'pretrained_models/pku-mmdv1/realtime/train_21_64_50',
@@ -51,12 +52,12 @@ def plot_segmentation_masks():
             'RT-ST-GCN$_{\Gamma=69}$',
             'RT-ST-GCN$_{\Gamma=153}$',
             'RT-ST-GCN$_{\Gamma=299}$',
-            'ST-GCN$_{W=50,\Gamma=9}$',
-            'ST-GCN$_{W=50,\Gamma=21}$',
-            'ST-GCN$_{W=50,\Gamma=69}$']
+            'ST-GCN$_{L=50,\Gamma=9}$',
+            'ST-GCN$_{L=50,\Gamma=21}$',
+            'ST-GCN$_{L=50,\Gamma=69}$']
 
         axs[i].imshow(np.concatenate((mask_label, mask_prediction), axis=0), cmap='terrain_r', vmin=0.0, vmax=51.0, aspect='auto', interpolation='nearest')
-        axs[i].set_ylabel(letters[i], rotation=0, fontsize='xx-large', fontweight='bold')
+        # axs[i].set_ylabel(letters[i], rotation=0, fontsize='xx-large', fontweight='bold')
         axs[i].set_yticks([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], labels=labels, fontsize='x-large')
         axs[i].tick_params(length=0.0)
         axs[i].set_frame_on(False)
@@ -87,24 +88,26 @@ def get_color_gradient(c1, c2, n):
 def plot_accuracy_gap():
     paths = [
         'pretrained_models/pku-mmdv1/realtime/train_9_64_50',
-        'pretrained_models/pku-mmdv1/realtime/train_21_64_50',
-        'pretrained_models/pku-mmdv1/realtime/train_69_64_50',
-        'pretrained_models/pku-mmdv1/realtime/train_153_64_50',
-        'pretrained_models/pku-mmdv1/realtime/train_299_64_50',
+        # 'pretrained_models/pku-mmdv1/realtime/train_21_64_50',
+        # 'pretrained_models/pku-mmdv1/realtime/train_69_64_50',
+        # 'pretrained_models/pku-mmdv1/realtime/train_153_64_50',
+        # 'pretrained_models/pku-mmdv1/realtime/train_299_64_50',
         'pretrained_models/pku-mmdv1/original/train_9_50_64_50',
-        'pretrained_models/pku-mmdv1/original/train_21_50_64_50',
-        'pretrained_models/pku-mmdv1/original/train_69_50_64_50',]
+        # 'pretrained_models/pku-mmdv1/original/train_21_50_64_50',
+        # 'pretrained_models/pku-mmdv1/original/train_69_50_64_50',
+        ]
 
     x = np.arange(0, 51)
     labels = [
         'RT-ST-GCN$_{\Gamma=9}$',
-        'RT-ST-GCN$_{\Gamma=21}$',
-        'RT-ST-GCN$_{\Gamma=69}$',
-        'RT-ST-GCN$_{\Gamma=153}$',
-        'RT-ST-GCN$_{\Gamma=299}$',
-        'ST-GCN$_{W=50,\Gamma=9}$',
-        'ST-GCN$_{W=50,\Gamma=21}$',
-        'ST-GCN$_{W=50,\Gamma=69}$']
+        # 'RT-ST-GCN$_{\Gamma=21}$',
+        # 'RT-ST-GCN$_{\Gamma=69}$',
+        # 'RT-ST-GCN$_{\Gamma=153}$',
+        # 'RT-ST-GCN$_{\Gamma=299}$',
+        'ST-GCN$_{L=50,\Gamma=9}$',
+        # 'ST-GCN$_{L=50,\Gamma=21}$',
+        # 'ST-GCN$_{L=50,\Gamma=69}$'
+        ]
 
     colors = get_color_gradient("#8A5AC2", "#3575D5", len(labels))
 

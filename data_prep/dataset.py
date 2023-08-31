@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import os
 
+
 class SkeletonDataset(Dataset):
     """Custom Dataset for lazy loading large skeleton Numpy files.
     
@@ -84,12 +85,21 @@ class SkeletonDatasetFromDirectory(Dataset):
             :math:`M` is the number of bodies in the sequence (always 1 in this processed dataset).     
     """
 
-    def __init__(self, data_dir, label_dir):
+    def __init__(self, data_dir, label_dir, f_actions):
         self.data = data_dir
         self.labels = label_dir
 
         # create a list to map the index of a sampled data element to the corresponding filename of features and labels
         self.dir_list = [file.split('.npy')[0] for file in sorted(os.listdir(self.data))]
+
+        # extract actions from the label file
+        with open(f_actions, 'r') as action_names:
+            actions = action_names.read().split('\n')
+
+        # 0th class is always background action
+        self.actions = {0: "background"}
+        for i, action in enumerate(actions):
+            self.actions[i+1] = action
 
     def __len__(self):
         return len(self.dir_list)
@@ -100,3 +110,16 @@ class SkeletonDatasetFromDirectory(Dataset):
         labels = np.int64(pd.read_csv('{0}/{1}.csv'.format(self.labels, self.dir_list[index]), header=None).values[:,0])
 
         return torch.from_numpy(data), torch.from_numpy(labels)
+
+    def __get_distribution__(self, rank):
+        # calculate class distribution
+        classes = torch.tensor(range(len(self.actions)), dtype=torch.float32, device=rank)
+        class_dist = torch.zeros(len(self.actions), dtype=torch.float32, device=rank)
+
+        for i in range(self.__len__()):
+            _, labels = self.__getitem__(i)
+            class_dist += torch.sum(
+                (labels[:,None].to(dtype=torch.float32, device=rank) == classes.expand(labels.shape[0],-1)).to(dtype=torch.float32, device=rank),
+                dim=(0))
+
+        return class_dist

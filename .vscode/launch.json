@@ -10,31 +10,17 @@
             "args": [
                 "train",
                 "--batch_size",
-                "64",
+                "2",
                 "--kernel",
                 "9",
                 "--receptive_field",
                 "300",
                 "--segment",
-                "1000",
+                "50",
                 // "--checkpoint",
                 // "pretrained_models/pku-mmd/original/train_9_50_64_50_24-02-23_02:04:57/epoch-49.pt",
                 "--config",
-                "config/pku-mmd/original_vsc.json"
-            ],
-        },
-        {
-            "name": "Train Adapted",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                "train",
-                "--checkpoint",
-                "pretrained_models/pku-mmd/adapted/run_51339647/final.pt",
-                "--config",
-                "config/pku-mmd/adapted_local.json",
+                "config/pku-mmd/original_local.json"
             ],
         },
         {
@@ -73,20 +59,6 @@
                 "pretrained_models/pku-mmd/original/train_9_50_32_50_10-02-23_00:27:56/final.pt",
                 "--config",
                 "config/pku-mmd/original_local.json"
-            ],
-        },
-        {
-            "name": "Test Adapted",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                // "test",
-                // "--checkpoint",
-                // "pretrained_models/pku-mmd/adapted/run_225/epoch-8.pt",
-                "--config",
-                "config/pku-mmd/adapted_local.json"
             ],
         },
         {

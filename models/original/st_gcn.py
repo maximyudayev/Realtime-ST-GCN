@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.utils.tgcn import ConvTemporalGraphical
 from models.utils.graph import Graph
-from torch.utils.checkpoint import checkpoint
 
 
 class Model(nn.Module):
@@ -29,7 +28,7 @@ class Model(nn.Module):
             :math:`M_{in}` is the number of instance in a frame.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, rank, **kwargs):
         super().__init__()
 
         self.conf = kwargs
@@ -94,7 +93,7 @@ class Model(nn.Module):
 
         # forward
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            x = checkpoint(gcn, x, self.A * importance)
+            x = gcn(x, self.A * importance)
 
         # global pooling (across time L, and nodes V)
         x = F.avg_pool2d(x, x.size()[2:])

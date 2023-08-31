@@ -1,17 +1,19 @@
 import math
 import torch
+from torch.distributed import barrier, gather, gather_object
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
 import pandas as pd
 import time
 import os
-from torch.autograd import Variable
 from torch.ao.quantization.quantize_fx import prepare_fx, convert_fx
 
 
 class Processor:
     """ST-GCN processing wrapper for training and testing the model.
+
+    TODO: update method descriptions
 
     Methods:
         train()
@@ -25,9 +27,11 @@ class Processor:
         self,
         model,
         num_classes,
-        dataloader,
-        device=None):
+        class_dist,
+        rank):
         """
+        Instantiates weighted CE loss and MSE loss.
+
         Args:
             model : ``torch.nn.Module``
                 Configured PyTorch model.
@@ -39,21 +43,18 @@ class Processor:
                 Data handle to account for its class imbalance in the CE loss.
         """
 
-        classes = torch.tensor(range(num_classes), dtype=torch.float32)
-        class_dist = torch.zeros(num_classes, dtype=torch.float32)
-
-        for _, labels in dataloader:
-            class_dist += torch.sum(
-                (labels[:,:,None].to(torch.float32) == classes[None].expand(labels.shape[1],-1)).to(torch.float32),
-                dim=(0,1))
-
+        self.rank = rank
         self.model = model
-        self.ce = nn.CrossEntropyLoss(weight=(1-class_dist/torch.sum(class_dist)).to(device=device), reduction='mean')
+        # CE guides model toward absolute correctness on single frame predictions
+        self.ce = nn.CrossEntropyLoss(weight=(1-class_dist/torch.sum(class_dist)).to(rank), reduction='mean')
+        # MSE component punishes large variations in class probabilities between consecutive samples
         self.mse = nn.MSELoss(reduction='none')
         self.num_classes = num_classes
 
 
     def model_size(self, save_dir):
+        """Returns size of the model."""
+
         temp_file = "{0}/temp.pt".format(save_dir)
         torch.save({"model_state_dict": self.model.state_dict()}, temp_file)
         size = os.path.getsize(temp_file)/1e6
@@ -69,17 +70,17 @@ class Processor:
             g['lr'] = rate
 
 
-    def get_segment_indices(self, x, L, device=None):
+    def get_segment_indices(self, x, L):
         """Detects edges in a sequence.
 
         Will yield arbitrary non-zero values at the edges of classes."""
 
-        edges = torch.zeros(L, device=device, dtype=torch.int64)
+        edges = torch.zeros(L, device=self.rank, dtype=torch.int64)
         edges[0] = 1
         edges[1:] = x[0,1:]-x[0,:-1]
 
         edges_indices = edges.nonzero()[:,0]
-        edges_indices_shifted = torch.zeros_like(edges_indices, device=device, dtype=torch.int64)
+        edges_indices_shifted = torch.zeros_like(edges_indices, device=self.rank, dtype=torch.int64)
         edges_indices_shifted[:-1] = edges_indices[1:]
         edges_indices_shifted[-1] = L
 
@@ -90,17 +91,16 @@ class Processor:
         self,
         overlap,
         labels,
-        predicted,
-        device=None):
+        predicted):
         """Computes segmental F1@k score with an IoU threshold."""
 
-        tp = torch.zeros(self.num_classes, overlap.size(0), device=device, dtype=torch.int64)
-        fp = torch.zeros(self.num_classes, overlap.size(0), device=device, dtype=torch.int64)
+        tp = torch.zeros(self.num_classes, overlap.size(0), device=self.rank, dtype=torch.int64)
+        fp = torch.zeros(self.num_classes, overlap.size(0), device=self.rank, dtype=torch.int64)
 
-        edges_indices_labels, edges_indices_labels_shifted = self.get_segment_indices(labels, labels.size(1), device=device)
-        edges_indices_predictions, edges_indices_predictions_shifted = self.get_segment_indices(predicted, predicted.size(1), device=device)
+        edges_indices_labels, edges_indices_labels_shifted = self.get_segment_indices(labels, labels.size(1), device=self.rank)
+        edges_indices_predictions, edges_indices_predictions_shifted = self.get_segment_indices(predicted, predicted.size(1), device=self.rank)
 
-        label_segments_used = torch.zeros(edges_indices_labels.size(0), overlap.size(0), device=device, dtype=torch.bool)
+        label_segments_used = torch.zeros(edges_indices_labels.size(0), overlap.size(0), device=self.rank, dtype=torch.bool)
 
         # check every segment of predictions for overlap with ground truth
         # segment as a whole is marked as TP/FP/FN, not frame-by-frame
@@ -141,18 +141,17 @@ class Processor:
     def edit_score(
         self,
         labels,
-        predicted,
-        device=None):
+        predicted):
         """Computes segmental edit score (Levenshtein distance) between two sequences."""
 
-        edges_indices_labels, _ = self.get_segment_indices(labels, labels.size(1), device=device)
-        edges_indices_predictions, _ = self.get_segment_indices(predicted, predicted.size(1), device=device)
+        edges_indices_labels, _ = self.get_segment_indices(labels, labels.size(1), device=self.rank)
+        edges_indices_predictions, _ = self.get_segment_indices(predicted, predicted.size(1), device=self.rank)
 
         # collect the segmental edit score
         m_row = edges_indices_predictions.size(0)
         n_col = edges_indices_labels.size(0)
 
-        D = torch.zeros(m_row+1, n_col+1, device=device, dtype=torch.float32)
+        D = torch.zeros(m_row+1, n_col+1, device=self.rank, dtype=torch.float32)
         D[:,0] = torch.arange(m_row+1)
         D[0,:] = torch.arange(n_col+1)
 
@@ -171,18 +170,17 @@ class Processor:
     def confusion_matrix(
         self,
         labels,
-        predicted,
-        device=None):
+        predicted):
         """Accumulates framewise confusion matrix."""
 
-        confusion = torch.zeros(self.num_classes, self.num_classes, device=device, dtype=torch.int64)
+        confusion = torch.zeros(self.num_classes, self.num_classes, device=self.rank, dtype=torch.int64)
         N, L = labels.size()
 
         # collect the correct predictions for each class and total per that class
         # for batch_el in range(N*M):
         for batch_el in range(N):
             # OHE 3D matrix, where label and prediction at time `t` are indices
-            top1_ohe = torch.zeros(L, self.num_classes, self.num_classes, device=device, dtype=torch.bool)
+            top1_ohe = torch.zeros(L, self.num_classes, self.num_classes, device=self.rank, dtype=torch.bool)
             top1_ohe[range(L), predicted[batch_el], labels[batch_el]] = True
 
             # sum-reduce OHE 3D matrix to get number of true vs. false classifications for each class on this sample
@@ -195,7 +193,6 @@ class Processor:
         self,
         captures,
         labels,
-        device=None,
         **kwargs):
         """Generator that does the forward pass on the model.
 
@@ -211,102 +208,103 @@ class Processor:
         TODO: automatically split the trial into segments to fit in available memory.
         TODO: provide different stride settings for the original model (not only the extremas).
         TODO: add a drawing to the repo to clarify how data segmenting is done.
-        TODO: move tensor segmenting/splitting code into corresponding model files.
         """
 
         # move both data to the compute device
         # (captures is a batch of full-length captures, label is a batch of ground truths)
-        captures, labels = captures.to(device), labels.to(device)
+        # (N,C,L,V)
+        captures, labels = captures.to(self.rank), labels.to(self.rank)
 
-        N, _, L, _ = captures.size()
+        N, C, L, V = captures.size()
 
         # Splits trial into overlapping subsequences of samples
-        if kwargs['dataset_type'] == 'dir': 
+        if kwargs['dataset_type'] == 'dir':
             if kwargs['model'] == 'original':
-                # size to divide the trial into to construct a data parallel batch (unfolded segments contain data per single prediction)
-                # offset size between windows
-                stride = kwargs['receptive_field'] if kwargs['latency'] else 1
+                # TODO: provide reduced temporal resolution case for the original model
                 # window size
                 W = kwargs['receptive_field']
-                # segment size to further divide the trial into to create a generator to limit memory burden
-                # (outputs can be computer and backpropagated independently because loss function has reduction type `mean`)
-                S = math.ceil((L+(kwargs['receptive_field']-1)-(kwargs['kernel'][0]-1))/kwargs['segment'])
-                # pad the start by the receptive field size
-                P_start = kwargs['receptive_field']-1
-                # no end padding needed for the original models because unfolding is done per output (incl. reduced temporal resolution)
-                P_end = 0
-                # slice labels if reduced temporal resolution is used
-                labels = labels[:, ::stride]
-            else:
-                # size to divide the trial into to construct a data parallel batch (unfolded segments contain data per multiple predictions)
-                # NOTE: adjust if kernel is different in multi-stage ST-GCN
-                # offset size between windows
-                stride = math.ceil((L-(kwargs['kernel'][0]-1))/kwargs['segment'])
-                # window size
-                W = stride+(kwargs['kernel'][0]-1)
+                # segment size to divide the trial into (number of predictions to make in a single forward pass)
+                S = kwargs['segment']
+                # temporal kernel size
+                G = kwargs['kernel'][0]
+                # pad the start by the receptive field size (emulates empty buffer)
+                P_start = W-1
+                # pad the end to chunk trial into equal size subsegments to prevent reallocating GPU memory (masks actual outputs later)
+                temp = (L+P_start-(S+W-1))%(S-1)
+                P_end = 0 if temp == 0 else (S-1-temp if temp > 0 else S-L-P_start)
+            elif kwargs['model'] == 'realtime':
+                # segment size to divide the trial into (number of input frames to ingest at a time)
+                S = kwargs['segment']
+                # temporal kernel size
+                G = kwargs['kernel'][0]
                 # no start padding needed for our RT model because elements are summed internally with a Toeplitz matrix to mimic FIFO behavior
-                # (only needs to overlap the previous segment by the size of the kernel-1 to mimic prefilled FIFOs to retain same state is if processed continuously)
+                # NOTE: only needs to overlap the previous segment by the size of the G-1 to mimic prefilled FIFOs to retain same state as if processed continuously
                 P_start = 0
-                # if captures is perfectly unfolded without padding, P will be 0
-                # pad the end of the sequence to use all of the available readings (masks actual outputs later)
-                P_end = stride*kwargs['segment']+(kwargs['kernel'][0]-1)-L
+                # pad the end to chunk trial into equal size overlapping subsegments to prevent reallocating GPU memory (masks actual outputs later)
+                # NOTE: subsegments must overlap by G-1 to continue from the same internal state (first G-1 predictions in subsegments other than first will be discarded)
+                temp = (L-(S-1))%(S-G)
+                # (temp = 0 - trial splits perfectly, temp < 0 - trial shorter than S, temp > 0 - padding needed to perfectly split)
+                P_end = 0 if temp == 0 else (S-G+1-temp if temp > 0 else S-L)
+            else:
+                raise NotImplementedError('Not supported model type in `forward_` implementation for directory-based dataset')
 
             captures = F.pad(captures, (0, 0, P_start, P_end))
-            # unfold the sequence to get the view with (overlapping) segments over original
-            captures = captures.unfold(2, W, stride)
 
-            N, C, N_new, V, T_new = captures.size()
-            # (N,C,N',V,T') -> batches of unfolded slices
-            # .contiguous() is needed before .view(), but also after .unfold() to operate on same data element 
-            # in the overlapping segments. Otherwise two segments will update the same memory location, leaking data.
-            # No need to .clone() the sliced view of the tensor after .contiguous()
-            captures = captures.permute(0, 2, 1, 4, 3).contiguous()
-            captures = captures.view(N * N_new, C, T_new, V)
-            # (N'',C,T',V)
-
-            # wraps tensor data for both model types in a generator comprehension
+            # generator comprehension for lazy processing using start and end indices of subsegments
             if kwargs['model'] == 'original':
-                #capture_gen = ((captures[S*i:S*(i+1)], S*i, S*(i+1) if S*(i+1) < N*N_new else N*N_new) for i in range(kwargs['segment']) if S1*i < L)
-                capture_gen = ((kwargs['segment']*i, kwargs['segment']*(i+1) if kwargs['segment']*(i+1) < N*N_new else N*N_new) for i in range(math.ceil(L/kwargs['segment'])))
+                num_segments = ((L+P_start+P_end-(S+W-1))//(S-1))+1
+                capture_gen = (((S-1)*i,W+(S-1)*(i+1)) for i in range(num_segments))
+            elif kwargs['model'] == 'realtime':
+                num_segments = ((L+P_end-S)//(S-G))+1
+                capture_gen = (((S-G)*i,S+(S-G)*i) for i in range(num_segments))
             else:
-                capture_gen = ((0, L) for _ in range(1))
+                raise NotImplementedError('Not supported model type in `forward_` implementation for directory-based dataset')
 
             # generate results for the consumer (effectively limits processing burden by splitting long sequence into manageable independent overlapping chunks)
-            for (start, end) in capture_gen:
+            for i, (start, end) in enumerate(capture_gen):
+                if kwargs['model'] == 'original':
+                    # subsegment split into S separate predictions in batch dimension (consequent predictions in original ST-GCN are independent)
+                    # TODO: change stride of unfolding for temporal resolution reduction
+                    data = captures[:,:,start:end].unfold(2,W,1).permute(0,2,1,4,3).contiguous().view(N*S,C,W,V)
+                elif kwargs['model'] == 'realtime':
+                    # subsegment of S frames selected (in proposed realtime version)
+                    data = captures[:,:,start:end]
+                else:
+                    raise NotImplementedError('Not supported model type in `forward_` implementation for directory-based dataset')
+
                 # make predictions and compute the loss
                 # forward pass the minibatch through the model for the corresponding subject
-                # the input tensor has shape (N, V, C, L): N-batch, V-nodes, C-channels, L-length
+                # the input tensor has shape (N, C, L, V): N-batch, V-nodes, C-channels, L-length
                 # the output tensor has shape (N, C', L)
-                predictions = self.model(Variable(captures[start-1 if start > 0 else start:end], requires_grad=True))
+                predictions = self.model(data)
 
-                if kwargs['dataset_type'] == 'dir':
-                    C_new = predictions.size(1)
-                    if kwargs['model'] == 'original':
-                        # arrange tensor back into a time series
-                        predictions = predictions.view(N, end-start+1 if start > 0 else end-start, C_new)
-                        predictions = predictions.permute(0, 2, 1)
-                    else:
-                        # clear the overlapping Gamma-1 predictions at the start of each segment (except the very first segment), since 
-                        # overlapped regions are added when folding the tensor
-                        predictions[1:,:,:kwargs['kernel'][0]-1] = 0
-                        # shuffle data around for the correct contiguous access by the fold()
-                        predictions = predictions[None].permute(0, 2, 3, 1).contiguous()
-                        predictions = predictions.view(N, C_new * W, -1)
-                        # fold segments of the original trial computed in parallel on multiple executors back into original length sequence
-                        # and drop the end padding used to fill tensor to equal row-column size
-                        predictions = F.fold(
-                            predictions,
-                            output_size=(1, L+P_end),
-                            kernel_size=(1, W),
-                            stride=(1, stride))[:,:,0,:L]
+                # TODO: check the logic below
+                if kwargs['model'] == 'original':
+                    # arrange tensor back into a time series
+                    # (N',C',1)->(N,S,C')
+                    predictions = predictions.view(N, S, self.num_classes)
+                    # (N,S,C')->(N,C',S)
+                    predictions = predictions.permute(0, 2, 1)
+                    # drop the outputs corresponding to end-padding (last subsegment)
+                    predictions = predictions if end <= (L+P_start) else predictions[:,:,:-P_end]
+                    # select correponding labels to compare against
+                    ground_truth = labels[:,(S-1)*i+(0 if i == 0 else 1):(S-1)*(i+1)+1 if end <= (L+P_start) else L]
+                elif kwargs['model'] == 'realtime':
+                    # clear the overlapping G-1 predictions at the start of each segment (except the very first segment)
+                    predictions = predictions if i == 0 else predictions[:,:,G:]
+                    # drop the outputs corresponding to end-padding (last subsegment)
+                    predictions = predictions if end <= L else predictions[:,:,:-P_end]
+                    # select correponding labels to compare against
+                    ground_truth = labels[:,(S-G)*i+(0 if i == 0 else G):S+(S-G)*i if end <= L else L]
+                else:
+                    raise NotImplementedError('Not supported model type in `forward_` implementation for directory-based dataset')
 
                 # cross-entropy expects output as class indices (N, C, K), with labels (N, K): 
-                # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (capture length)
+                # N-batch (flattened multi-skeleton minibatch), C-class, K-extra dimension (segment length)
                 # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
-                # CE guides model toward absolute correctness on single frame predictions,
-                # MSE component punishes large variations in class probabilities between consecutive samples
-                ce = self.ce(predictions[:,:,1 if start > 0 else 0:], labels[:,start:end])
-                # In the reduced temporal resolution setting of the original model, MSE loss is expected to be large the higher
+                # NOTE: subsegments have an overlap of 1 in outputs to enable correct MSE calculation, CE calculation should avoid double counting that frame
+                ce = self.ce(predictions[:,:,1 if i!=0 else 0:], ground_truth)
+                # in the reduced temporal resolution setting of the original model, MSE loss is expected to be large the higher
                 # the receptive field since after that many frames a human could start performing a drastically diferent action
                 mse = 0.15 * torch.mean(
                     torch.clamp(
@@ -316,20 +314,21 @@ class Processor:
                         min=0,
                         max=16))
 
-                if kwargs['model'] == 'original':
-                    ce /= math.ceil(L/kwargs['segment'])
-                    mse /= math.ceil(L/kwargs['segment'])
+                # average the errors across subsegments of a trial
+                ce /= num_segments
+                mse /= num_segments
 
                 # calculate the predictions statistics
                 # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
-                top5_probs, top5_predicted = torch.topk(F.softmax(predictions[:,:,1 if start > 0 else 0:], dim=1), k=5, dim=1)
+                # NOTE: avoid double counting single overlapping frame occuring in two consequent segments
+                top5_probs, top5_predicted = torch.topk(F.softmax(predictions[:,:,1 if i!=0 else 0:], dim=1), k=5, dim=1)
                 top1_predicted = top5_predicted[:,0,:]
                 # top5_probs[0,:,torch.bitwise_and(torch.any(top5_predicted == labels[:,None,:], dim=1), top1_predicted != labels)[0]].permute(1,0) # probabilities of classes where top-1 and top-5 don't intersect
-                top1_cor = torch.sum(top1_predicted == labels[:,start:end]).data.item()
-                top5_cor = torch.sum(top5_predicted == labels[:,None,start:end]).data.item()
-                tot = labels[:,start:end].numel()
-
-                yield top1_predicted, top5_predicted, labels[:,start:end], top1_cor, top5_cor, tot, ce, mse, None
+                top1_cor = torch.sum(top1_predicted == ground_truth).data.item()
+                top5_cor = torch.sum(top5_predicted == ground_truth[:,None]).data.item()
+                tot = ground_truth.numel()
+                # lazy yield statistics for each segment of the trial
+                yield top1_predicted, top5_predicted, ground_truth, top1_cor, top5_cor, tot, ce, mse, None
         else:
             raise NotImplementedError('Did not provide a safe `forward_` implementation for file-based dataset types since #93df7ae')
 
@@ -338,7 +337,6 @@ class Processor:
         self,
         captures,
         labels,
-        device=None,
         **kwargs):
         """Generator that does the continual forward pass on the inference-only model.
 
@@ -346,12 +344,12 @@ class Processor:
 
         # move both data to the compute device
         # (captures is a batch of full-length captures, label is a batch of ground truths)
-        captures, labels = captures.to(device), labels.to(device)
+        captures, labels = captures.to(self.rank), labels.to(self.rank)
 
         N, _, L, _ = captures.size()
 
         latency = 0
-        predictions = torch.zeros(N, self.num_classes, L, dtype=captures.dtype, device=device)
+        predictions = torch.zeros(N, self.num_classes, L, dtype=captures.dtype, device=self.rank)
 
         # Splits trial into overlapping subsequences of samples
         if kwargs['dataset_type'] == 'dir': 
@@ -404,7 +402,6 @@ class Processor:
         self,
         dataloader,
         foo,
-        device=None,
         num_samples=None,
         **kwargs):
         """Does a forward pass without recording gradients. 
@@ -427,14 +424,14 @@ class Processor:
             latency = 0
 
             # stats for F1@k segmentation-detection metric of Lea, et al. (2016)
-            threshold = torch.tensor(kwargs['iou_threshold'], device=device, dtype=torch.float32)
-            f1 = torch.zeros(len(dataloader), threshold.size(0), device=device, dtype=torch.float32)
+            threshold = torch.tensor(kwargs['iou_threshold'], device=self.rank, dtype=torch.float32)
+            f1 = torch.zeros(len(dataloader), threshold.size(0), device=self.rank, dtype=torch.float32)
 
             # stats for segmental edit score
-            edit_score = 0
+            edit_score = torch.zeros(len(dataloader), device=self.rank, dtype=torch.float32)
 
             # stats for the framewise confusion matrix
-            confusion_matrix = torch.zeros(self.num_classes, self.num_classes, device=device, dtype=torch.int64)
+            confusion_matrix = torch.zeros(self.num_classes, self.num_classes, device=self.rank, dtype=torch.int64)
 
             # sweep through the validation dataset in minibatches
             # calculate IoU for the F1@k metrics
@@ -444,7 +441,7 @@ class Processor:
                 if k == num_samples: break
                 
                 top1_predicted = []
-                for segment_top1_predicted, _, segment_labels, top1_cor, top5_cor, tot, ce, mse, lat in foo(captures, labels, device, **kwargs):
+                for segment_top1_predicted, _, segment_labels, top1_cor, top5_cor, tot, ce, mse, lat in foo(captures, labels, self.rank, **kwargs):
                     N, _ = segment_labels.size()
 
                     # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
@@ -463,11 +460,11 @@ class Processor:
                 latency += lat if lat else 0
 
                 top1 = torch.concat(top1_predicted, dim=1)
-                labels = labels.to(device)
-                
-                f1[k] = self.f1_score(threshold, labels, top1, device=device)
-                edit_score += self.edit_score(labels, top1, device=device)
-                confusion_matrix += self.confusion_matrix(labels, top1, device=device)
+                labels = labels.to(self.rank)
+
+                f1[k] = self.f1_score(threshold, labels, top1)
+                edit_score[k] += self.edit_score(labels, top1)
+                confusion_matrix += self.confusion_matrix(labels, top1)
 
             test_end_time = time.time()
             duration = test_end_time - test_start_time
@@ -476,7 +473,7 @@ class Processor:
             top5_acc = top5_correct / total
             # discard NaN F1 values and compute the macro F1-score (average)
             F1 = f1.nan_to_num(0).mean(dim=0)
-            edit_score /= k
+            edit_score = edit_score.mean(dim=0)
 
         return top1_acc, top5_acc, F1, edit_score, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val, latency/k if latency else duration
 
@@ -484,7 +481,6 @@ class Processor:
     def train_(
         self,
         dataloader,
-        device=None,
         **kwargs):
         """Does one epoch of forward and backward passes on each minibatch in the dataloader."""
 
@@ -501,7 +497,7 @@ class Processor:
             N, _, _, _ = captures.size()
 
             # generator that returns lazy iterator over segments of the trial to process long sequence in manageable overlapping chunks to fit in memory
-            for _, _, _, top1_cor, top5_cor, tot, ce, mse, _ in self.forward_(captures, labels, device, **kwargs):
+            for _, _, _, top1_cor, top5_cor, tot, ce, mse, _ in self.forward_(captures, labels, **kwargs):
                 top1_correct += top1_cor
                 top5_correct += top5_cor
                 total += tot
@@ -531,8 +527,8 @@ class Processor:
                     loss /= (len(dataloader) % kwargs['batch_size'])
 
                 print(
-                    "[trial {0}]: ce = {1}, mse = {2}, loss = {3}, ce_epoch = {4}, mse_epoch = {5}"
-                    .format(i, ce, mse, loss, ce_epoch_loss_train, mse_epoch_loss_train),
+                    "[rank {6}, trial {0}]: ce = {1}, mse = {2}, loss = {3}, ce_epoch = {4}, mse_epoch = {5}"
+                    .format(i, ce, mse, loss, ce_epoch_loss_train, mse_epoch_loss_train, self.rank),
                     flush=True,
                     file=kwargs['log'][0])
 
@@ -557,11 +553,12 @@ class Processor:
 
 
     def train(
-        self, 
+        self,
+        rank,
+        world_size,
         save_dir, 
         train_dataloader,
         val_dataloader,
-        device,
         epochs,
         checkpoints,
         checkpoint,
@@ -570,45 +567,47 @@ class Processor:
         **kwargs):
         """Trains the model, given user-defined training parameters."""
 
-        # move the model to the compute device(s) if available (CPU, GPU, TPU, etc.)
-        if torch.cuda.device_count() > 1:
-            print("Using", torch.cuda.device_count(), "allocated GPUs", flush=True, file=kwargs['log'][0])
-            self.model = nn.DataParallel(self.model)
-        self.model.to(device)
-
         # setup the optimizer
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
 
-        if checkpoint:
-            state = torch.load(checkpoint, map_location=device)
-            range_epochs = range(state['epoch']+1, epochs)
+        # TODO: identify/input where the model was trained (i.e. CPU/GPU) and setup map_location correctly
+        # NOTE: now assumes model was trained on GPU and maps memory to other distributed GPU processes
+        map_location = {'cuda:%d' % 0: 'cuda:%d' % self.rank} if not math.isnan(self.rank) else None
 
-            # load the checkpoint if not training from scratch
+        # load the checkpoint if not training from scratch
+        if checkpoint:
+            state = torch.load(checkpoint, map_location=map_location)
             self.optimizer.load_state_dict(state['optimizer_state_dict'])
+            range_epochs = range(state['epoch']+1, epochs)
         else:
             range_epochs = range(epochs)
 
         # variables for email updates
-        epoch_list = []
+        if not torch.cuda.is_available() or rank==0:
+            epoch_list = []
 
-        top1_acc_train_list = []
-        top1_acc_val_list = []
-        top5_acc_train_list = []
-        top5_acc_val_list = []
-        duration_train_list = []
-        duration_val_list = []
+            top1_acc_train_list = []
+            top1_acc_val_list = []
+            top5_acc_train_list = []
+            top5_acc_val_list = []
+            duration_train_list = []
+            duration_val_list = []
 
-        ce_loss_train_list = []
-        mse_loss_train_list = []
-        epoch_loss_train_list = []
+            ce_loss_train_list = []
+            mse_loss_train_list = []
+            epoch_loss_train_list = []
 
-        ce_loss_val_list = []
-        mse_loss_val_list = []
-        epoch_loss_val_list = []
+            ce_loss_val_list = []
+            mse_loss_val_list = []
+            epoch_loss_val_list = []
 
         # train the model for num_epochs
         # (dataloader is automatically shuffled after each epoch)
         for epoch in range_epochs:
+            if torch.cuda.is_available():
+                train_dataloader.sampler.set_epoch(epoch)
+                val_dataloader.sampler.set_epoch(epoch)
+
             # set layers to training mode if behavior of any differs between train and prediction
             # (prepares Dropout and BatchNormalization layers to disable and to learn parameters, respectively)
             self.model.train()
@@ -617,26 +616,49 @@ class Processor:
             if (epoch % 10 == 0):
                 self.update_lr_(learning_rate, learning_rate_decay, epoch//10)
 
-            epoch_start_time = time.time()
+            if self.rank == 0:
+                epoch_start_time = time.time()
 
             # clear the gradients before next epoch
             self.optimizer.zero_grad()
 
-            top1_correct, top5_correct, total, ce_epoch_loss_train, mse_epoch_loss_train = self.train_(train_dataloader, device=device, **kwargs)
+            top1_correct, top5_correct, total, ce_epoch_loss_train, mse_epoch_loss_train = self.train_(train_dataloader, **kwargs)
 
-            epoch_end_time = time.time()
-            duration_train = epoch_end_time - epoch_start_time
-            top1_acc_train = top1_correct / total
-            top5_acc_train = top5_correct / total
+            if self.rank == 0:
+                epoch_end_time = time.time()
+                duration_train = epoch_end_time - epoch_start_time
+            
+            # gather train stats to the master node
+            if torch.cuda.is_available():
+                train_objects = {
+                    "top1_correct": top1_correct,
+                    "top5_correct": top5_correct,
+                    "total": total, 
+                    "ce_epoch_loss_train": ce_epoch_loss_train,
+                    "mse_epoch_loss_train": mse_epoch_loss_train}
+
+                train_output = [None for _ in range(world_size)]
+
+                gather_object(train_objects, train_output if rank == 0 else None, dst=0)
+            
+            if rank == 0:
+                for obj in train_output[1:]:
+                    top1_correct += obj["top1_correct"]
+                    top5_correct += obj["top5_correct"]
+                    total += obj["total"]
+                    ce_epoch_loss_train += obj["ce_epoch_loss_train"]
+                    mse_epoch_loss_train += obj["mse_epoch_loss_train"]
 
             # checkpoint the model during training at specified epochs
-            if epoch in checkpoints:
+            if epoch in checkpoints and ((self.rank == 0 and torch.cuda.is_available()) or not torch.cuda.is_available()):
                 torch.save({
                     "epoch": epoch,
-                    "model_state_dict": self.model.state_dict(),
+                    "model_state_dict": self.model.module.state_dict(),
                     "optimizer_state_dict": self.optimizer.state_dict(),
                     "loss": (ce_epoch_loss_train + mse_epoch_loss_train) / len(train_dataloader),
                     }, "{0}/epoch-{1}.pt".format(save_dir, epoch))
+            if torch.cuda.is_available():
+                barrier()
 
             # set layers to inference mode if behavior differs between train and prediction
             # (prepares Dropout and BatchNormalization layers to enable and to freeze parameters, respectively)
@@ -649,130 +671,165 @@ class Processor:
             top1_acc_val, top5_acc_val, f1_score, edit_score, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val, duration_val = self.validate_(
                 dataloader=val_dataloader,
                 foo=self.forward_,
-                device=device,
                 **kwargs)
 
-            # record all stats of interest for logging/notification
-            epoch_list.insert(0, epoch)
+            # gather val stats to the master node
+            if torch.cuda.is_available():
+                val_objects = {
+                    "top1_acc_val": top1_acc_val,
+                    "top5_acc_val": top5_acc_val,
+                    "edit_score": edit_score,
+                    "ce_epoch_loss_val": ce_epoch_loss_val,
+                    "mse_epoch_loss_val": mse_epoch_loss_val,
+                    "duration_val": duration_val}
 
-            ce_loss_train_list.insert(0, ce_epoch_loss_train / len(train_dataloader))
-            mse_loss_train_list.insert(0, mse_epoch_loss_train / len(train_dataloader))
-            epoch_loss_train_list.insert(0, (ce_epoch_loss_train + mse_epoch_loss_train) / len(train_dataloader))
+                val_output = [None for _ in range(world_size)]
+                f1_scores = [torch.zeros(self.num_classes, len(kwargs['iou_threshold']), device=self.rank, dtype=torch.int64) for _ in range(world_size)]
+                confusion_matrices = [torch.zeros(self.num_classes, self.num_classes, device=self.rank, dtype=torch.int64) for _ in range(world_size)]
 
-            ce_loss_val_list.insert(0, ce_epoch_loss_val / len(val_dataloader))
-            mse_loss_val_list.insert(0, mse_epoch_loss_val / len(val_dataloader))
-            epoch_loss_val_list.insert(0, (ce_epoch_loss_val + mse_epoch_loss_val) / len(val_dataloader))
+                gather_object(val_objects, val_output if rank == 0 else None, dst=0)
+                gather(f1_score, f1_scores if rank == 0 else None, dst=0)
+                gather(confusion_matrix, confusion_matrices if rank == 0 else None, dst=0)
+            
+            if rank == 0:
+                for i in range(1, world_size):
+                    top1_acc_val += val_output[i]["top1_acc_val"]
+                    top5_acc_val += val_output[i]["top5_acc_val"]
+                    ce_epoch_loss_val += val_output[i]["ce_epoch_loss_val"]
+                    mse_epoch_loss_val += val_output[i]["mse_epoch_loss_val"]
+                    edit_score += val_output[i]["edit_score"]
+                    f1_score += f1_scores[i]
+                    confusion_matrix += confusion_matrices[i]
+                    
+                top1_acc_val /= world_size
+                top5_acc_val /= world_size
+            
+            # record all stats of interest for logging/notification (on master node only if using GPUs)
+            if not torch.cuda.is_available() or rank==0:
+                top1_acc_train = top1_correct / total
+                top5_acc_train = top5_correct / total
+                
+                epoch_list.insert(0, epoch)
 
-            top1_acc_train_list.insert(0, top1_acc_train)
-            top1_acc_val_list.insert(0, top1_acc_val)
-            top5_acc_train_list.insert(0, top5_acc_train)
-            top5_acc_val_list.insert(0, top5_acc_val)
-            duration_train_list.insert(0, duration_train)
-            duration_val_list.insert(0, duration_val)
+                ce_loss_train_list.insert(0, ce_epoch_loss_train / len(train_dataloader))
+                mse_loss_train_list.insert(0, mse_epoch_loss_train / len(train_dataloader))
+                epoch_loss_train_list.insert(0, (ce_epoch_loss_train + mse_epoch_loss_train) / len(train_dataloader))
+
+                ce_loss_val_list.insert(0, ce_epoch_loss_val / len(val_dataloader))
+                mse_loss_val_list.insert(0, mse_epoch_loss_val / len(val_dataloader))
+                epoch_loss_val_list.insert(0, (ce_epoch_loss_val + mse_epoch_loss_val) / len(val_dataloader))
+
+                top1_acc_train_list.insert(0, top1_acc_train)
+                top1_acc_val_list.insert(0, top1_acc_val)
+                top5_acc_train_list.insert(0, top5_acc_train)
+                top5_acc_val_list.insert(0, top5_acc_val)
+                duration_train_list.insert(0, duration_train)
+                duration_val_list.insert(0, duration_val)
  
-            # save all metrics
-            pd.DataFrame(torch.stack((torch.tensor(kwargs['iou_threshold'],dtype=torch.float32),f1_score.cpu())).numpy()).to_csv('{0}/macro-F1@k.csv'.format(save_dir))
-            pd.DataFrame(data={"top1": top1_acc_val, "top5": top5_acc_val}, index=[0]).to_csv('{0}/accuracy.csv'.format(save_dir))
-            pd.DataFrame(data={"edit": edit_score.cpu().numpy()}, index=[0]).to_csv('{0}/edit.csv'.format(save_dir))
-            pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion-matrix.csv'.format(save_dir))
+                # save all metrics
+                pd.DataFrame(torch.stack((torch.tensor(kwargs['iou_threshold'],dtype=torch.float32),f1_score.cpu())).numpy()).to_csv('{0}/macro-F1@k.csv'.format(save_dir))
+                pd.DataFrame(data={"top1": top1_acc_val, "top5": top5_acc_val}, index=[0]).to_csv('{0}/accuracy.csv'.format(save_dir))
+                pd.DataFrame(data={"edit": edit_score.cpu().numpy()}, index=[0]).to_csv('{0}/edit.csv'.format(save_dir))
+                pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion-matrix.csv'.format(save_dir))
 
-            # sweep through the sample trials
-            for i in [175, 293, 37]: # 39 (L=4718), 177 (L=6973), 299 (L=2378)
-                # save prediction and ground truth of reference samples
-                captures, labels = val_dataloader.dataset.__getitem__(i)
+                # sweep through the sample trials
+                for i in [175, 293, 37]: # 39 (L=4718), 177 (L=6973), 299 (L=2378)
+                    # save prediction and ground truth of reference samples
+                    captures, labels = val_dataloader.dataset.__getitem__(i)
 
-                # move both data to the compute device
-                # (captures is a batch of full-length captures, label is a batch of ground truths)
-                captures, labels = captures[None].to(device), labels[None].to(device)
+                    # move both data to the compute device
+                    # (captures is a batch of full-length captures, label is a batch of ground truths)
+                    captures, labels = captures[None].to(self.rank), labels[None].to(self.rank)
 
-                top1_predicted = []
-                for segment_top1_predicted, _, _, _, _, _, _, _, _ in self.forward_(captures, labels, device=device, **kwargs):
-                    top1_predicted.append(segment_top1_predicted)
+                    top1_predicted = []
+                    for segment_top1_predicted, _, _, _, _, _, _, _, _ in self.forward_(captures, labels, device=self.rank, **kwargs):
+                        top1_predicted.append(segment_top1_predicted)
 
-                pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}.csv'.format(save_dir, i))
+                    pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}.csv'.format(save_dir, i))
 
-            # log and send notifications
-            print(
-                "[epoch {0}]: epoch_loss = {1}, top1_acc_train = {2}, top5_acc_train = {3}, top1_acc_val = {4}, top5_acc_val = {5}, f1@k = {6}, edit = {7}"
-                .format(
-                    epoch, 
-                    (ce_epoch_loss_train + mse_epoch_loss_train) / len(train_dataloader),
-                    top1_acc_train,
-                    top5_acc_train,
-                    top1_acc_val,
-                    top5_acc_val,
-                    f1_score.cpu().numpy(),
-                    edit_score),
-                flush=True,
-                file=kwargs['log'][0])
-
-            if kwargs['verbose'] > 0:
+                # log and send notifications
                 print(
-                    "[epoch {0}]: train_time = {1}, val_time = {2}"
+                    "[epoch {0}]: epoch_loss = {1}, top1_acc_train = {2}, top5_acc_train = {3}, top1_acc_val = {4}, top5_acc_val = {5}, f1@k = {6}, edit = {7}"
                     .format(
-                        epoch,
-                        duration_train,
-                        duration_val),
+                        epoch, 
+                        (ce_epoch_loss_train + mse_epoch_loss_train) / len(train_dataloader),
+                        top1_acc_train,
+                        top5_acc_train,
+                        top1_acc_val,
+                        top5_acc_val,
+                        f1_score.cpu().numpy(),
+                        edit_score),
                     flush=True,
                     file=kwargs['log'][0])
 
-            # format a stats table (in newest to oldest order) and send it as email update
-            if kwargs['verbose'] > 1:
-                os.system(
-                    'header="\n %-6s %5s %11s %11s %9s %9s %11s %9s\n";'
-                    'format=" %-03d %4.6f %1.4f %1.4f %1.4f %1.4f %5.6f %5.6f\n";'
-                    'printf "$header" "EPOCH" "LOSS" "TOP1_TRAIN" "TOP5_TRAIN" "TOP1_VAL" "TOP5_VAL" "TIME_TRAIN" "TIME_VAL" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
-                    'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
-                    'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: status update" {2}'
-                    .format(
-                        ' '.join([
-                            ' '.join([str(e) for e in t]) for t 
-                            in zip(
-                                epoch_list,
-                                epoch_loss_train_list,
-                                top1_acc_train_list,
-                                top5_acc_train_list,
-                                top1_acc_val_list,
-                                top5_acc_val_list,
-                                duration_train_list,
-                                duration_val_list)]),
-                        '_'.join([kwargs['model'], 'red' if kwargs['model'] == 'original' and kwargs['latency'] else '', *kwargs['jobname']]),
-                        kwargs['email']))
+                if kwargs['verbose'] > 0:
+                    print(
+                        "[epoch {0}]: train_time = {1}, val_time = {2}"
+                        .format(
+                            epoch,
+                            duration_train,
+                            duration_val),
+                        flush=True,
+                        file=kwargs['log'][0])
 
-            # save (update) train-validation curve as a CSV file after each epoch
-            pd.DataFrame(
-                data={
-                    'top1_train': top1_acc_train_list,
-                    'top1_val': top1_acc_val_list,
-                    'top5_train': top5_acc_train_list,
-                    'top5_val': top5_acc_val_list
-                }).to_csv('{0}/accuracy-curve.csv'.format(save_dir))
+                # format a stats table (in newest to oldest order) and send it as email update
+                if kwargs['verbose'] > 1:
+                    os.system(
+                        'header="\n %-6s %5s %11s %11s %9s %9s %11s %9s\n";'
+                        'format=" %-03d %4.6f %1.4f %1.4f %1.4f %1.4f %5.6f %5.6f\n";'
+                        'printf "$header" "EPOCH" "LOSS" "TOP1_TRAIN" "TOP5_TRAIN" "TOP1_VAL" "TOP5_VAL" "TIME_TRAIN" "TIME_VAL" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
+                        'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
+                        'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: status update" {2}'
+                        .format(
+                            ' '.join([
+                                ' '.join([str(e) for e in t]) for t 
+                                in zip(
+                                    epoch_list,
+                                    epoch_loss_train_list,
+                                    top1_acc_train_list,
+                                    top5_acc_train_list,
+                                    top1_acc_val_list,
+                                    top5_acc_val_list,
+                                    duration_train_list,
+                                    duration_val_list)]),
+                            '_'.join([kwargs['model'], 'red' if kwargs['model'] == 'original' and kwargs['latency'] else '', *kwargs['jobname']]),
+                            kwargs['email']))
 
-            # save (update) loss curve as a CSV file after each epoch
-            pd.DataFrame(
-                data={
-                    'ce_train': ce_loss_train_list,
-                    'mse_train': mse_loss_train_list,
-                    'ce_val': ce_loss_val_list,
-                    'mse_val': mse_loss_val_list,
-                }).to_csv('{0}/train-validation-curve.csv'.format(save_dir))
+                # save (update) train-validation curve as a CSV file after each epoch
+                pd.DataFrame(
+                    data={
+                        'top1_train': top1_acc_train_list,
+                        'top1_val': top1_acc_val_list,
+                        'top5_train': top5_acc_train_list,
+                        'top5_val': top5_acc_val_list
+                    }).to_csv('{0}/accuracy-curve.csv'.format(save_dir))
+
+                # save (update) loss curve as a CSV file after each epoch
+                pd.DataFrame(
+                    data={
+                        'ce_train': ce_loss_train_list,
+                        'mse_train': mse_loss_train_list,
+                        'ce_val': ce_loss_val_list,
+                        'mse_val': mse_loss_val_list,
+                    }).to_csv('{0}/train-validation-curve.csv'.format(save_dir))
 
         # save the final model
-        torch.save({
-            "epoch": epoch,
-            "model_state_dict": self.model.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict(),
-            "loss": (ce_epoch_loss_train + mse_epoch_loss_train) / len(train_dataloader),
-            }, "{0}/final.pt".format(save_dir))
+        if epoch in checkpoints and ((self.rank == 0 and torch.cuda.is_available()) or not torch.cuda.is_available()):
+            torch.save({
+                "epoch": epoch,
+                "model_state_dict": self.model.module.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "loss": (ce_epoch_loss_train + mse_epoch_loss_train) / len(train_dataloader),
+                }, "{0}/final.pt".format(save_dir))
+        barrier()
 
         return
 
-
+    # TODO: complete the test routine
     def test(
         self,
         save_dir,
         dataloader,
-        device,
         **kwargs):
         """Performs only the forward pass for inference.
         """
@@ -853,12 +910,11 @@ class Processor:
                     kwargs['email']))
         return
 
-
+    # TODO: complete the benchmark routine
     def benchmark(
         self,
         save_dir,
         dataloader,
-        device,
         **kwargs):
         """Benchmarks FP32 and INT8 (PTSQ) performance of a model.
 
@@ -887,9 +943,6 @@ class Processor:
             file=kwargs['log'][0])
 
         size_fp32 = self.model_size(save_dir)
-
-        # TODO: remove IOTextWrapper object from kwargs as 'log' parameter specifier: cannot serialize the object during model conversion to quantized
-        del self.model.conf['log']
 
         # prepare the FP32 model: attaches observers to all layers, including the custom layer
         qconfig = torch.ao.quantization.get_default_qconfig_mapping(kwargs['backend'])

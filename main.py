@@ -1,11 +1,16 @@
 import torch
 from torch.utils.data import DataLoader
 from data_prep.dataset import SkeletonDataset, SkeletonDatasetFromDirectory
-from models.proposed.st_gcn import Stgcn
+from models.proposed.st_gcn import Model as RtStgcn
 from models.proposed.st_gcn import AggregateStgcn, ObservedAggregateStgcn, QAggregateStgcn
-from models.adapted.st_gcn import Model as AdaptedStgcn
 from models.original.st_gcn import Model as OriginalStgcn
 from processor import Processor
+
+import torch.multiprocessing as mp
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed import init_process_group, destroy_process_group, scatter_object_list, scatter
+
 import st_gcn_parser
 import argparse
 import os
@@ -16,13 +21,17 @@ import json
 from datetime import datetime
 
 
-def common(args):
+def common(rank: int, world_size: int, args):
     """Performs setup common to any ST-GCN model variant.
 
     Only needs to be invoked once for a given problem (train-test, benchmark, etc.). 
     Corresponds to the parts of the pipeline irrespective of the black-box model used.
     Creates DataLoaders, sets up processing device and random number generator,
     reads action classes file.
+
+    TODO: use IP/port from SLURM to initialize DDP process group
+    TODO: compute dataset class imbalance on one node only and scatter
+    TODO: use pin_memory to load data straight into corresponding GPU
 
     Args:
         args : ``dict``
@@ -31,37 +40,42 @@ def common(args):
     Returns:
         Dictionary of action classes.
 
-        PyTorch device (CPU or GPU).
-
         Train and validation DataLoaders.
     """
 
-    # setting up random number generator for deterministic and meaningful benchmarking
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = True
-
     # preparing datasets for training and validation
     if args.dataset_type == 'file':
-        train_data = SkeletonDataset('{0}/train_data.npy'.format(args.data), '{0}/train_label.pkl'.format(args.data))
-        val_data = SkeletonDataset('{0}/val_data.npy'.format(args.data), '{0}/val_label.pkl'.format(args.data))
+        train_data = SkeletonDataset('{0}/train_data.npy'.format(args.data), '{0}/train_label.pkl'.format(args.data), args.actions)
+        val_data = SkeletonDataset('{0}/val_data.npy'.format(args.data), '{0}/val_label.pkl'.format(args.data), args.actions)
     elif args.dataset_type == 'dir':
-        train_data = SkeletonDatasetFromDirectory('{0}/train/features'.format(args.data), '{0}/train/labels'.format(args.data))
-        val_data = SkeletonDatasetFromDirectory('{0}/val/features'.format(args.data), '{0}/val/labels'.format(args.data))
+        train_data = SkeletonDatasetFromDirectory('{0}/train/features'.format(args.data), '{0}/train/labels'.format(args.data), args.actions)
+        val_data = SkeletonDatasetFromDirectory('{0}/val/features'.format(args.data), '{0}/val/labels'.format(args.data), args.actions)
 
     # trials of different length can not be placed in the same tensor when batching, have to manually iterate over them
     batch_size = 1 if args.dataset_type == 'dir' else args.batch_size
 
-    train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-    val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
+    # if using CUDA, initialize process group for DDP
+    if torch.cuda.is_available():
+        # TODO: use IP and port information from SLURM
+        os.environ["MASTER_ADDR"] = "localhost"
+        os.environ["MASTER_PORT"] = "12355"
+        init_process_group(backend="nccl", rank=rank, world_size=world_size)
+        torch.cuda.set_device(rank)
 
-    # extract skeleton graph data
-    with open(args.graph, 'r') as graph_file:
-        graph = json.load(graph_file)
+    # prepare the DataLoaders
+    if torch.cuda.is_available():
+        train_sampler = DistributedSampler(train_data, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
+        val_sampler = DistributedSampler(val_data, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
+        
+        # TODO: use pin_memory to load each sample in corresponding GPU
+        train_dataloader = DataLoader(train_data, batch_size=batch_size, sampler=train_sampler)
+        val_dataloader = DataLoader(val_data, batch_size=batch_size, sampler=val_sampler)
+    else:
+        train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+        val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
 
     # extract actions from the label file
+    # NOTE: must be repeated by each process to create proper output tensor size for class distribution
     with open(args.actions, 'r') as action_names:
         actions = action_names.read().split('\n')
 
@@ -70,26 +84,54 @@ def common(args):
     for i, action in enumerate(actions):
         actions_dict[i+1] = action
 
-    jobname = [args.command, str(args.kernel[0])]
-    if args.model == 'original':
-        jobname += [str(args.receptive_field)]
-    if args.command == 'train':
-        jobname += [str(args.batch_size), str(args.epochs)]
+    # do some setup only on Master Node and scatter results to other GPUs
+    if rank == 0 or not torch.cuda.is_available():
+        # extract skeleton graph data
+        with open(args.graph, 'r') as graph_file:
+            graph = json.load(graph_file)
 
-    # prepare a directory to store results
-    save_dir = "{0}/{1}/{2}_{3}".format(
-        args.out,
-        args.model + ('_red' if args.model == 'original' and args.latency else ''), 
-        '_'.join(jobname),
-        datetime.now().strftime('%d-%m-%y_%H:%M:%S'))
+        jobname = [args.command, str(args.kernel[0])]
+        if args.model == 'original':
+            jobname += [str(args.receptive_field)]
+        if args.command == 'train':
+            jobname += [str(args.batch_size), str(args.epochs)]
 
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+        # prepare a directory to store results
+        save_dir = "{0}/{1}/{2}_{3}".format(
+            args.out,
+            args.model + ('_red' if args.model == 'original' and args.latency else ''), 
+            '_'.join(jobname),
+            datetime.now().strftime('%d-%m-%y_%H:%M:%S'))
 
-    return graph, actions_dict, device, train_dataloader, val_dataloader, save_dir, jobname
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+
+        # create object list for scattering across processes
+        objects = [{
+            "graph": graph,
+            "save_dir": save_dir,
+            "jobname": jobname       
+        }]
+
+        # get class distribution
+        class_dist = train_data.__get_distribution__(rank)
+        tensors = [class_dist]
+    elif rank != 0 and torch.cuda.is_available():
+        objects = [None]
+        tensors = [None]
+
+    # scatter results to all other GPUs
+    if torch.cuda.is_available():
+        output_list = [None]
+        output_tensor = torch.zeros(len(actions_dict), device=rank)
+        scatter_object_list(output_list, objects*world_size, src=0)
+        scatter(output_tensor, tensors*world_size, src=0)
+        return train_dataloader, val_dataloader, output_tensor, output_list[0]["graph"], actions_dict, output_list[0]["save_dir"], output_list[0]["jobname"]
+    else:
+        return train_dataloader, val_dataloader, class_dist, graph, actions_dict, save_dir, jobname
 
 
-def build_model(args):
+def build_model(rank: int, args):
     """Builds the selected ST-GCN model variant.
 
     Args:
@@ -117,18 +159,20 @@ def build_model(args):
             'Check your config file.')
 
     if args.model == 'original':
-        model = OriginalStgcn(**vars(args))
-    elif args.model == 'adapted':
-        model = AdaptedStgcn(**vars(args))
+        model = OriginalStgcn(rank,**vars(args))
     else:
         # all 3 adapted versions are encapsulated in the same class, training is identical (batch mode),
         # usecase changes applied during inference
-        model = Stgcn(**vars(args))
+        model = RtStgcn(rank,**vars(args))
+
+    # if using GPUs, convert the created model into the DistributedDataParallel
+    if torch.cuda.is_available():
+        model = DDP(model.to(rank), device_ids=[rank])
 
     return model
 
 
-def train(args):
+def train(rank: int, world_size: int, args):
     """Entry point for training functionality of a single selected model.
 
     Args:
@@ -137,21 +181,23 @@ def train(args):
     """
 
     # perform common setup around the model's black box
-    args.graph, actions, device, train_dataloader, val_dataloader, save_dir, args.jobname = common(args)
+    train_dataloader, val_dataloader, class_dist, args.graph, actions, save_dir, args.jobname = common(rank, world_size, args)
+    
     args.num_classes = len(actions)
 
     # construct the target model using the CLI arguments
-    model = build_model(args)
+    model = build_model(rank, args)
+    # TODO: use barrier() to load checkpoint model to GPU and copy its initial state across GPUs
     # load the checkpoint if not trained from scratch
-    if args.checkpoint:
-        # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
-        model.load_state_dict({
-            k.split('module.')[1]: v 
-            for k, v in
-            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+    # if args.checkpoint:
+    #     # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
+    #     model.load_state_dict({
+    #         k.split('module.')[1]: v 
+    #         for k, v in
+    #         torch.load(args.checkpoint)['model_state_dict'].items()})
 
     # construct a processing wrapper
-    trainer = Processor(model, args.num_classes, train_dataloader, device)
+    trainer = Processor(model, args.num_classes, class_dist, rank)
 
     start_time = time.time()
 
@@ -161,10 +207,11 @@ def train(args):
     # perform the training
     # (the model is trained on all skeletons in the scene, simultaneously)
     trainer.train(
+        rank=rank,
+        world_size=world_size,
         save_dir=save_dir,
         train_dataloader=train_dataloader,
         val_dataloader=val_dataloader,
-        device=device,
         **vars(args))
 
     print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
@@ -197,10 +244,13 @@ def train(args):
             '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
             args.email))
 
+    # cleanup
+    if torch.cuda.is_available(): destroy_process_group()
+
     return
 
 
-def test(args):
+def test(rank: int, world_size: int, args):
     """Entry point for testing functionality of a single pretrained model.
 
     Args:
@@ -209,21 +259,24 @@ def test(args):
     """
 
     # perform common setup around the model's black box
-    args.graph, actions, device, _, val_dataloader, save_dir, args.jobname = common(args)
+    _, val_dataloader, class_dist, args.graph, actions, save_dir, args.jobname = common(rank, world_size, args)
+    
     args.num_classes = len(actions)
 
     # construct the target model using the CLI arguments
-    model = build_model(args)
+    model = build_model(rank, args)
+    # TODO: use barrier() to load checkpoint model to GPU and copy its initial state across GPUs
     # load the checkpoint if not trained from scratch
-    if args.checkpoint:
-        # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
-        model.load_state_dict({
-            k.split('module.')[1]: v 
-            for k, v in
-            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+    # if args.checkpoint:
+    #     # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
+    #     model.load_state_dict({
+    #         k.split('module.')[1]: v 
+    #         for k, v in
+    #         torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
     # construct a processing wrapper
-    trainer = Processor(model, args.num_classes, val_dataloader, device)
+    # NOTE: uses class distribution from training set
+    trainer = Processor(model, args.num_classes, class_dist, rank)
 
     start_time = time.time()
 
@@ -231,7 +284,7 @@ def test(args):
     print("Testing started", flush=True, file=args.log[0])
 
     # perform the testing
-    trainer.test(save_dir, val_dataloader, device, **vars(args))
+    trainer.test(save_dir, val_dataloader, **vars(args))
 
     print("Testing completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
 
@@ -260,10 +313,13 @@ def test(args):
             '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
             args.email))
 
+    # cleanup
+    if torch.cuda.is_available(): destroy_process_group()
+
     return
 
 
-def benchmark(args):
+def benchmark(rank: int, world_size: int, args):
     """Entry point for benchmarking inference of a model.
 
     Args:
@@ -273,7 +329,8 @@ def benchmark(args):
 
     # perform common setup around the model's black box
     # TODO: add entries for original ST-GCN modules
-    args.graph, actions, device, _, val_dataloader, save_dir, args.jobname = common(args)
+    _, val_dataloader, class_dist, args.graph, actions, save_dir, args.jobname = common(rank, world_size, args)
+    
     args.num_classes = len(actions)
     args.prepare_dict = {
         "float_to_observed_custom_module_class": {
@@ -291,17 +348,18 @@ def benchmark(args):
     }
 
     # construct the target model using the CLI arguments
-    model = build_model(args)
+    model = build_model(rank, args)
+    # TODO: use barrier() to load checkpoint model to GPU and copy its initial state across GPUs
     # load the checkpoint if not trained from scratch
-    if args.checkpoint:
-        # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
-        model.load_state_dict({
-            (k.split('module.')[1] if k.split('.')[1] != 'edge_importance' else 'st_gcn.{0}.edge_importance'.format(k.split('.')[2])): v
-            for k, v in
-            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+    # if args.checkpoint:
+    #     # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
+    #     model.load_state_dict({
+    #         (k.split('module.')[1] if k.split('.')[1] != 'edge_importance' else 'st_gcn.{0}.edge_importance'.format(k.split('.')[2])): v
+    #         for k, v in
+    #         torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
 
     # construct a processing wrapper
-    trainer = Processor(model, args.num_classes, val_dataloader, device)
+    trainer = Processor(model, args.num_classes, class_dist, rank)
 
     start_time = time.time()
 
@@ -309,7 +367,7 @@ def benchmark(args):
     print("Benchmarking started", flush=True, file=args.log[0])
 
     # perform the testing
-    trainer.benchmark(save_dir, val_dataloader, device, **vars(args))
+    trainer.benchmark(save_dir, val_dataloader, **vars(args))
 
     print("Benchmarking completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
 
@@ -344,6 +402,9 @@ def benchmark(args):
             '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
             args.email))
 
+    # cleanup
+    if torch.cuda.is_available(): destroy_process_group()
+
     return
 
 
@@ -366,7 +427,7 @@ if __name__ == '__main__':
         'train',
         usage="""%(prog)s [-h]
             \r\t[--config FILE]
-            \r\t[--model MODEL {realtime|buffer_realtime|batch|original}]
+            \r\t[--model MODEL {realtime|original}]
             \r\t[--strategy STRATEGY {uniform|distance|spatial}]
             \r\t[--in_feat IN_FEAT]
             \r\t[--stages STAGES]
@@ -428,7 +489,7 @@ if __name__ == '__main__':
             '(default: config/pku-mmd/realtime_local.json)')
     parser_train_model.add_argument(
         '--model',
-        choices=['realtime','buffer_realtime','batch','original'],
+        choices=['realtime','original'],
         metavar='',
         help='type of NN model to use (default: realtime)')
     parser_train_model.add_argument(
@@ -464,13 +525,7 @@ if __name__ == '__main__':
         metavar='',
         help='size of overlapping segments of frames to divide a trial into for '
             'parallelizing computation (creates a new batch dimension). '
-            'Currently only supports datasets with different length trials. '
-            'Applied only when --model != original and --dataset_type=dir (default: 100)')
-    parser_train_model.add_argument(
-        '--importance',
-        default=True,
-        action='store_true',
-        help='flag specifying whether ST-GCN layers have edge importance weighting '
+            'Currently only supports datasets with different length trials. torch.cuda.device_count()ghting '
             '(default: True)')
     parser_train_model.add_argument(
         '--latency',
@@ -613,7 +668,7 @@ if __name__ == '__main__':
         nargs=2,
         type=argparse.FileType('w'),
         # const=[t1+t2+'.txt' for t1, t2 in zip(['log.o.','log.e.'],2*[str(time.time())])],
-        default=[sys.stdout, sys.stderr],
+        default=[None, None],
         metavar='',
         help='files to log the script to. Only argument without default option in --config '
             '(default: stdout, stderr)')
@@ -634,7 +689,7 @@ if __name__ == '__main__':
         'test',
         usage="""%(prog)s\n\t[-h]
             \r\t[--config FILE]
-            \r\t[--model MODEL {realtime|buffer_realtime|batch|original}]
+            \r\t[--model MODEL {realtime|original}]
             \r\t[--strategy STRATEGY {uniform|distance|spatial}]
             \r\t[--in_feat IN_FEAT]
             \r\t[--stages STAGES]
@@ -686,7 +741,7 @@ if __name__ == '__main__':
             '(default: config/pku-mmd/realtime_local.json)')
     parser_test_model.add_argument(
         '--model',
-        choices=['realtime','buffer_realtime','batch','original'],
+        choices=['realtime','original'],
         metavar='',
         help='type of NN model to use (default: realtime)')
     parser_test_model.add_argument(
@@ -838,7 +893,7 @@ if __name__ == '__main__':
         nargs=2,
         type=argparse.FileType('w'),
         # const=[t1+t2+'.txt' for t1, t2 in zip(['log.o.','log.e.'],2*[str(time.time())])],
-        default=[sys.stdout, sys.stderr],
+        default=[None, None],
         metavar='',
         help='files to log the script to. Only argument without default option in --config '
             '(default: stdout, stderr)')
@@ -859,7 +914,7 @@ if __name__ == '__main__':
         'benchmark',
         usage="""%(prog)s\n\t[-h]
             \r\t[--config FILE]
-            \r\t[--model MODEL {realtime|buffer_realtime|batch|original}]
+            \r\t[--model MODEL {realtime|original}]
             \r\t[--strategy STRATEGY {uniform|distance|spatial}]
             \r\t[--in_feat IN_FEAT]
             \r\t[--stages STAGES]
@@ -911,7 +966,7 @@ if __name__ == '__main__':
             '(default: config/pku-mmd/realtime_local.json)')
     parser_benchmark_model.add_argument(
         '--model',
-        choices=['realtime','buffer_realtime','batch','original'],
+        choices=['realtime','original'],
         metavar='',
         help='type of NN model to use (default: realtime)')
     parser_benchmark_model.add_argument(
@@ -1066,7 +1121,7 @@ if __name__ == '__main__':
         nargs=2,
         type=argparse.FileType('w'),
         # const=[t1+t2+'.txt' for t1, t2 in zip(['log.o.','log.e.'],2*[str(time.time())])],
-        default=[sys.stdout, sys.stderr],
+        default=[None, None],
         metavar='',
         help='files to log the script to. Only argument without default option in --config '
             '(default: stdout, stderr)')
@@ -1089,5 +1144,17 @@ if __name__ == '__main__':
     # parse the arguments
     args = parser.parse_args()
 
+    # setting up random number generator for deterministic and meaningful benchmarking
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+
     # enter the appropriate command
-    args.func(args)
+    # will use all available GPUs for DistributedDataParallel model and spawn K processes, 1 for each GPU
+    # otherwise will run as a CPU model
+    if torch.cuda.is_available():
+        world_size = torch.cuda.device_count()
+        mp.spawn(args.func, args=(world_size, args), nprocs=world_size)
+    else:
+        args.func(None, None, args)

@@ -3,11 +3,10 @@ import torch.nn as nn
 import torch.nn.quantized as nnq
 import torch.nn.functional as F
 from models.utils.graph import Graph
-from torch.utils.checkpoint import checkpoint
 from torch.ao.quantization import QuantStub, DeQuantStub
 
 
-class Stgcn(nn.Module):
+class Model(nn.Module):
     """Spatial temporal graph convolutional network of Yan, et al. (2018), adapted for realtime.
     (https://arxiv.org/abs/1801.07455).
 
@@ -42,6 +41,7 @@ class Stgcn(nn.Module):
 
     def __init__(
         self,
+        rank,
         **kwargs) -> None:
         """
         Kwargs:
@@ -133,7 +133,9 @@ class Stgcn(nn.Module):
                     residual=not not kwargs['residual'][i][j],
                     dropout=kwargs['dropout'][i][j],
                     importance=kwargs['importance'],
-                    graph=self.A)
+                    graph=self.A,
+                    segment=kwargs["segment"],
+                    rank=rank)
                 for j in range(layers_in_stage)] 
                 for i, layers_in_stage in enumerate(kwargs['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
@@ -264,7 +266,9 @@ class StgcnLayer(nn.Module):
         dropout,
         residual,
         importance,
-        graph):
+        graph,
+        segment,
+        rank):
         """
         Args:
             in_channels : ``int``
@@ -312,6 +316,16 @@ class StgcnLayer(nn.Module):
         # learnable edge importance weighting matrices (each layer, separate weighting)
         self.edge_importance = nn.Parameter(torch.ones(num_joints,num_joints), requires_grad=True) if importance else 1
 
+        # TODO: replace with unfold -> fold calls
+        # Toeplitz matrix for temporal accumulation that mimics FIFO behavior, but in batch on full sequence
+        self.toeplitz = torch.zeros(segment, segment, device=rank)
+        for i in range(self.kernel_size//self.stride):
+            toeplitz += F.pad(
+                torch.eye(
+                    segment - self.stride * i,
+                    device=rank),
+                (i*self.stride,0,0,i*self.stride))
+
         # convolution of incoming frame 
         # (out_channels is a multiple of the partition number
         # to avoid for-looping over several partitions)
@@ -346,18 +360,6 @@ class StgcnLayer(nn.Module):
 
 
     def forward(self, x):
-        # TODO: replace with unfold -> fold calls
-        # Toeplitz matrix for temporal accumulation that mimics FIFO behavior, but in batch on full sequence
-        capture_length = x.size(2)
-        device = torch.device("cuda:{0}".format(torch.cuda.current_device()) if torch.cuda.is_available() else "cpu")
-        toeplitz = torch.zeros(capture_length, capture_length, device=device)
-        for i in range(self.kernel_size//self.stride):
-            toeplitz += F.pad(
-                torch.eye(
-                    capture_length - self.stride * i,
-                    device=device),
-                (i*self.stride,0,0,i*self.stride))
-
         # residual branch 
         res = self.residual(x)
 
@@ -380,7 +382,7 @@ class StgcnLayer(nn.Module):
         # sum temporally by multiplying features with the Toeplitz matrix 
         # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L) 
         x = x.permute(0,2,3,4,1)
-        x = torch.matmul(x, toeplitz)
+        x = torch.matmul(x, self.toeplitz)
         # sum across partitions (N,C,V,L)
         x = torch.sum(x, dim=(1))
         # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V) 
