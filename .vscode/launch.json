@@ -10,17 +10,15 @@
             "args": [
                 "train",
                 "--batch_size",
-                "2",
+                "4",
                 "--kernel",
                 "9",
                 "--receptive_field",
                 "300",
                 "--segment",
-                "50",
-                // "--checkpoint",
-                // "pretrained_models/pku-mmd/original/train_9_50_64_50_24-02-23_02:04:57/epoch-49.pt",
+                "150",
                 "--config",
-                "config/pku-mmd/original_local.json"
+                "config/imu_fogit_ABCD/original_local.json"
             ],
         },
         {
@@ -162,7 +160,7 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "args": [
-                "data/pku-mmdv1/train/features"
+                "data/imu_fogit_ABCD"
             ]
         }
     ]

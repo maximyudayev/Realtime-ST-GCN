@@ -97,8 +97,8 @@ class Processor:
         tp = torch.zeros(self.num_classes, overlap.size(0), device=self.rank, dtype=torch.int64)
         fp = torch.zeros(self.num_classes, overlap.size(0), device=self.rank, dtype=torch.int64)
 
-        edges_indices_labels, edges_indices_labels_shifted = self.get_segment_indices(labels, labels.size(1), device=self.rank)
-        edges_indices_predictions, edges_indices_predictions_shifted = self.get_segment_indices(predicted, predicted.size(1), device=self.rank)
+        edges_indices_labels, edges_indices_labels_shifted = self.get_segment_indices(labels, labels.size(1))
+        edges_indices_predictions, edges_indices_predictions_shifted = self.get_segment_indices(predicted, predicted.size(1))
 
         label_segments_used = torch.zeros(edges_indices_labels.size(0), overlap.size(0), device=self.rank, dtype=torch.bool)
 
@@ -144,8 +144,8 @@ class Processor:
         predicted):
         """Computes segmental edit score (Levenshtein distance) between two sequences."""
 
-        edges_indices_labels, _ = self.get_segment_indices(labels, labels.size(1), device=self.rank)
-        edges_indices_predictions, _ = self.get_segment_indices(predicted, predicted.size(1), device=self.rank)
+        edges_indices_labels, _ = self.get_segment_indices(labels, labels.size(1))
+        edges_indices_predictions, _ = self.get_segment_indices(predicted, predicted.size(1))
 
         # collect the segmental edit score
         m_row = edges_indices_predictions.size(0)
@@ -428,7 +428,7 @@ class Processor:
             f1 = torch.zeros(len(dataloader), threshold.size(0), device=self.rank, dtype=torch.float32)
 
             # stats for segmental edit score
-            edit_score = torch.zeros(len(dataloader), device=self.rank, dtype=torch.float32)
+            edit = torch.zeros(len(dataloader), 1, device=self.rank, dtype=torch.float32)
 
             # stats for the framewise confusion matrix
             confusion_matrix = torch.zeros(self.num_classes, self.num_classes, device=self.rank, dtype=torch.int64)
@@ -441,7 +441,7 @@ class Processor:
                 if k == num_samples: break
                 
                 top1_predicted = []
-                for segment_top1_predicted, _, segment_labels, top1_cor, top5_cor, tot, ce, mse, lat in foo(captures, labels, self.rank, **kwargs):
+                for segment_top1_predicted, _, segment_labels, top1_cor, top5_cor, tot, ce, mse, lat in foo(captures, labels, **kwargs):
                     N, _ = segment_labels.size()
 
                     # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
@@ -463,7 +463,7 @@ class Processor:
                 labels = labels.to(self.rank)
 
                 f1[k] = self.f1_score(threshold, labels, top1)
-                edit_score[k] += self.edit_score(labels, top1)
+                edit[k] += self.edit_score(labels, top1)
                 confusion_matrix += self.confusion_matrix(labels, top1)
 
             test_end_time = time.time()
@@ -473,9 +473,9 @@ class Processor:
             top5_acc = top5_correct / total
             # discard NaN F1 values and compute the macro F1-score (average)
             F1 = f1.nan_to_num(0).mean(dim=0)
-            edit_score = edit_score.mean(dim=0)
+            edit = edit.mean(dim=0)
 
-        return top1_acc, top5_acc, F1, edit_score, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val, latency/k if latency else duration
+        return top1_acc, top5_acc, F1, edit, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val, latency/k if latency else duration
 
 
     def train_(
@@ -535,7 +535,7 @@ class Processor:
                 # backward pass to compute the gradients
                 loss.backward()
 
-            # zero the gradient buffers after every batch
+            # zero the gradient buffers after every batch TODO: account for minibatch size after distributed sampler divided the dataset across multiple GPUs
             # if dataset is a tensor with equal length trials, always enters
             # if dataset is a set of different length trials, enters every ``batch_size`` iteration
             if ((kwargs['dataset_type'] == 'dir' and
@@ -678,17 +678,18 @@ class Processor:
                 val_objects = {
                     "top1_acc_val": top1_acc_val,
                     "top5_acc_val": top5_acc_val,
-                    "edit_score": edit_score,
                     "ce_epoch_loss_val": ce_epoch_loss_val,
                     "mse_epoch_loss_val": mse_epoch_loss_val,
                     "duration_val": duration_val}
 
                 val_output = [None for _ in range(world_size)]
-                f1_scores = [torch.zeros(self.num_classes, len(kwargs['iou_threshold']), device=self.rank, dtype=torch.int64) for _ in range(world_size)]
+                f1_scores = [torch.zeros(len(kwargs['iou_threshold']), device=self.rank, dtype=torch.float32) for _ in range(world_size)]
+                edit_scores = [torch.zeros(1, device=self.rank, dtype=torch.float32) for _ in range(world_size)]
                 confusion_matrices = [torch.zeros(self.num_classes, self.num_classes, device=self.rank, dtype=torch.int64) for _ in range(world_size)]
 
                 gather_object(val_objects, val_output if rank == 0 else None, dst=0)
                 gather(f1_score, f1_scores if rank == 0 else None, dst=0)
+                gather(edit_score, edit_scores if rank == 0 else None, dst=0)
                 gather(confusion_matrix, confusion_matrices if rank == 0 else None, dst=0)
             
             if rank == 0:
@@ -697,12 +698,14 @@ class Processor:
                     top5_acc_val += val_output[i]["top5_acc_val"]
                     ce_epoch_loss_val += val_output[i]["ce_epoch_loss_val"]
                     mse_epoch_loss_val += val_output[i]["mse_epoch_loss_val"]
-                    edit_score += val_output[i]["edit_score"]
+                    edit_score += edit_scores[i]
                     f1_score += f1_scores[i]
                     confusion_matrix += confusion_matrices[i]
-                    
+
                 top1_acc_val /= world_size
                 top5_acc_val /= world_size
+                edit_score /= world_size
+                f1_score /= world_size
             
             # record all stats of interest for logging/notification (on master node only if using GPUs)
             if not torch.cuda.is_available() or rank==0:
