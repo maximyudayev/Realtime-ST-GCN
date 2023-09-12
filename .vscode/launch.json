@@ -10,13 +10,13 @@
             "args": [
                 "train",
                 "--batch_size",
-                "4",
+                "346",
                 "--kernel",
                 "9",
                 "--receptive_field",
                 "300",
                 "--segment",
-                "150",
+                "100",
                 "--config",
                 "config/imu_fogit_ABCD/original_local.json"
             ],

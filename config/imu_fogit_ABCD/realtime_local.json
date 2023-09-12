@@ -42,6 +42,7 @@
         "batch_size": 64
     },
     "job": {
-        "email": "maxim.yudayev@kuleuven.be"
+        "email": "maxim.yudayev@kuleuven.be",
+        "demo": [33, 75, 60]
     }
 }

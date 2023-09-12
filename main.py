@@ -14,7 +14,6 @@ from torch.distributed import init_process_group, destroy_process_group, scatter
 import st_gcn_parser
 import argparse
 import os
-import sys
 import random
 import time
 import json
@@ -30,7 +29,6 @@ def common(rank: int, world_size: int, args):
     reads action classes file.
 
     TODO: use IP/port from SLURM to initialize DDP process group
-    TODO: compute dataset class imbalance on one node only and scatter
     TODO: use pin_memory to load data straight into corresponding GPU
 
     Args:
@@ -80,7 +78,7 @@ def common(rank: int, world_size: int, args):
         actions = action_names.read().split('\n')
 
     # 0th class is always background action
-    actions_dict = {0: "background"}
+    actions_dict = dict()
     for i, action in enumerate(actions):
         actions_dict[i+1] = action
 
@@ -199,10 +197,11 @@ def train(rank: int, world_size: int, args):
     # construct a processing wrapper
     trainer = Processor(model, args.num_classes, class_dist, rank)
 
-    start_time = time.time()
+    if rank == 0 or not torch.cuda.is_available():
+        start_time = time.time()
 
-    # last dimension is the number of subjects in the scene (2 for datasets used)
-    print("Training started", flush=True, file=args.log[0])
+        # last dimension is the number of subjects in the scene (2 for datasets used)
+        print("Training started", flush=True, file=args.log[0])
 
     # perform the training
     # (the model is trained on all skeletons in the scene, simultaneously)
@@ -214,35 +213,34 @@ def train(rank: int, world_size: int, args):
         val_dataloader=val_dataloader,
         **vars(args))
 
-    print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
+    if rank == 0 or not torch.cuda.is_available():
+        print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
 
-    # copy over resulting files of interest into the $VSC_DATA persistent storage
-    if args.backup:
-        backup_dir = "{0}/{1}".format(
-            args.backup,
-            '/'.join(save_dir.split('/')[-2:]))
+        # copy over resulting files of interest into the $VSC_DATA persistent storage
+        if args.backup:
+            backup_dir = "{0}/{1}".format(
+                args.backup,
+                '/'.join(save_dir.split('/')[-2:]))
 
-        if not os.path.exists(backup_dir):
-            os.makedirs(backup_dir)
+            if not os.path.exists(backup_dir):
+                os.makedirs(backup_dir)
 
-        for f in [
-            'accuracy-curve.csv',
-            'train-validation-curve.csv',
-            'final.pt',
-            'macro-F1@k.csv',
-            'accuracy.csv',
-            'edit.csv',
-            'confusion-matrix.csv',
-            'segmentation-175.csv',
-            'segmentation-293.csv',
-            'segmentation-37.csv']:
-            os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
+            for f in [
+                'accuracy-curve.csv',
+                'train-validation-curve.csv',
+                'final.pt',
+                'macro-F1@k.csv',
+                'accuracy.csv',
+                'edit.csv',
+                'confusion-matrix.csv',
+                *['segmentation-{0}.csv'.format(i) for i in args.demo]]:
+                os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
 
-    os.system(
-        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
-        .format(
-            '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
-            args.email))
+        os.system(
+            'mail -s "[{0}]: COMPLETED" {1} <<< ""'
+            .format(
+                '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
+                args.email))
 
     # cleanup
     if torch.cuda.is_available(): destroy_process_group()
@@ -278,40 +276,45 @@ def test(rank: int, world_size: int, args):
     # NOTE: uses class distribution from training set
     trainer = Processor(model, args.num_classes, class_dist, rank)
 
-    start_time = time.time()
+    if rank == 0 or not torch.cuda.is_available():
+        start_time = time.time()
 
-    # last dimension is the number of subjects in the scene (2 for datasets used)
-    print("Testing started", flush=True, file=args.log[0])
+        # last dimension is the number of subjects in the scene (2 for datasets used)
+        print("Testing started", flush=True, file=args.log[0])
 
     # perform the testing
-    trainer.test(save_dir, val_dataloader, **vars(args))
+    trainer.test(
+        rank=rank,
+        world_size=world_size,
+        save_dir=save_dir,
+        dataloader=val_dataloader,
+        **vars(args))
 
-    print("Testing completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
+    if rank == 0 or not torch.cuda.is_available():
+        print("Testing completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
 
-    # copy over resulting files of interest into the $VSC_DATA persistent storage
-    if args.backup:
-        backup_dir = "{0}/{1}".format(
-            args.backup,
-            '/'.join(save_dir.split('/')[-2:]))
+        # copy over resulting files of interest into the $VSC_DATA persistent storage
+        if args.backup:
+            backup_dir = "{0}/{1}".format(
+                args.backup,
+                '/'.join(save_dir.split('/')[-2:]))
 
-        if not os.path.exists(backup_dir):
-            os.makedirs(backup_dir)
+            if not os.path.exists(backup_dir):
+                os.makedirs(backup_dir)
 
-        for f in [
-            'macro-F1@k.csv',
-            'accuracy.csv',
-            'edit.csv',
-            'confusion-matrix.csv',
-            'segmentation-175.csv',
-            'segmentation-293.csv',
-            'segmentation-37.csv']:
-            os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
+            for f in [
+                'macro-F1@k.csv',
+                'accuracy.csv',
+                'edit.csv',
+                'confusion-matrix.csv',
+                *['segmentation-{0}.csv'.format(i) for i in args.demo]]:
+                os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
 
-    os.system(
-        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
-        .format(
-            '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
-            args.email))
+        os.system(
+            'mail -s "[{0}]: COMPLETED" {1} <<< ""'
+            .format(
+                '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
+                args.email))
 
     # cleanup
     if torch.cuda.is_available(): destroy_process_group()
@@ -321,6 +324,8 @@ def test(rank: int, world_size: int, args):
 
 def benchmark(rank: int, world_size: int, args):
     """Entry point for benchmarking inference of a model.
+
+    TODO: adapt for DDP.
 
     Args:
         args : ``dict``
@@ -388,12 +393,8 @@ def benchmark(rank: int, world_size: int, args):
             'model-size.csv',
             'confusion-matrix_fp32.csv',
             'confusion-matrix_int8.csv',
-            'segmentation-175_fp32.csv',
-            'segmentation-293_fp32.csv',
-            'segmentation-37_fp32.csv',
-            'segmentation-175_int8.csv',
-            'segmentation-293_int8.csv',
-            'segmentation-37_int8.csv']:
+            *['segmentation-{0}_fp32.csv'.format(i) for i in args.demo],
+            *['segmentation-{0}_int8.csv'.format(i) for i in args.demo]]:
             os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
 
     os.system(

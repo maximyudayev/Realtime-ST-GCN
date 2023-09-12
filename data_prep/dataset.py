@@ -97,7 +97,7 @@ class SkeletonDatasetFromDirectory(Dataset):
             actions = action_names.read().split('\n')
 
         # 0th class is always background action
-        self.actions = {0: "background"}
+        self.actions = dict()
         for i, action in enumerate(actions):
             self.actions[i+1] = action
 

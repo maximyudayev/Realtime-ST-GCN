@@ -205,7 +205,7 @@ class Processor:
         resolution for compute (does not compute redundant values for input frames otherwise overlapped by 
         multiple windows).
 
-        TODO: automatically split the trial into segments to fit in available memory.
+        TODO: automatically split the trial into segments to maximize use of available memory.
         TODO: provide different stride settings for the original model (not only the extremas).
         TODO: add a drawing to the repo to clarify how data segmenting is done.
         """
@@ -278,7 +278,6 @@ class Processor:
                 # the output tensor has shape (N, C', L)
                 predictions = self.model(data)
 
-                # TODO: check the logic below
                 if kwargs['model'] == 'original':
                     # arrange tensor back into a time series
                     # (N',C',1)->(N,S,C')
@@ -338,9 +337,7 @@ class Processor:
         captures,
         labels,
         **kwargs):
-        """Generator that does the continual forward pass on the inference-only model.
-
-        """
+        """Generator that does the continual forward pass on the inference-only model."""
 
         # move both data to the compute device
         # (captures is a batch of full-length captures, label is a batch of ground truths)
@@ -493,6 +490,7 @@ class Processor:
 
         # sweep through the training dataset in minibatches
         # TODO: make changes for file dataset type
+        # TODO: account for minibatch size after distributed sampler divided the dataset across multiple GPUs
         for i, (captures, labels) in enumerate(dataloader):
             N, _, _, _ = captures.size()
 
@@ -535,7 +533,7 @@ class Processor:
                 # backward pass to compute the gradients
                 loss.backward()
 
-            # zero the gradient buffers after every batch TODO: account for minibatch size after distributed sampler divided the dataset across multiple GPUs
+            # zero the gradient buffers after every batch
             # if dataset is a tensor with equal length trials, always enters
             # if dataset is a set of different length trials, enters every ``batch_size`` iteration
             if ((kwargs['dataset_type'] == 'dir' and
@@ -570,12 +568,11 @@ class Processor:
         # setup the optimizer
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
 
-        # TODO: identify/input where the model was trained (i.e. CPU/GPU) and setup map_location correctly
-        # NOTE: now assumes model was trained on GPU and maps memory to other distributed GPU processes
-        map_location = {'cuda:%d' % 0: 'cuda:%d' % self.rank} if not math.isnan(self.rank) else None
-
         # load the checkpoint if not training from scratch
         if checkpoint:
+            # TODO: identify/input where the model was trained (i.e. CPU/GPU) and setup map_location automatically
+            # NOTE: now assumes model was trained on GPU and maps memory to other distributed GPU processes
+            map_location = {'cuda:%d' % 0: 'cuda:%d' % self.rank} if not math.isnan(self.rank) else None
             state = torch.load(checkpoint, map_location=map_location)
             self.optimizer.load_state_dict(state['optimizer_state_dict'])
             range_epochs = range(state['epoch']+1, epochs)
@@ -736,7 +733,7 @@ class Processor:
                 pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion-matrix.csv'.format(save_dir))
 
                 # sweep through the sample trials
-                for i in [175, 293, 37]: # 39 (L=4718), 177 (L=6973), 299 (L=2378)
+                for i in kwargs["demo"]:
                     # save prediction and ground truth of reference samples
                     captures, labels = val_dataloader.dataset.__getitem__(i)
 
@@ -745,7 +742,7 @@ class Processor:
                     captures, labels = captures[None].to(self.rank), labels[None].to(self.rank)
 
                     top1_predicted = []
-                    for segment_top1_predicted, _, _, _, _, _, _, _, _ in self.forward_(captures, labels, device=self.rank, **kwargs):
+                    for segment_top1_predicted, _, _, _, _, _, _, _, _ in self.forward_(captures, labels, **kwargs):
                         top1_predicted.append(segment_top1_predicted)
 
                     pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}.csv'.format(save_dir, i))
@@ -761,7 +758,7 @@ class Processor:
                         top1_acc_val,
                         top5_acc_val,
                         f1_score.cpu().numpy(),
-                        edit_score),
+                        edit_score.cpu().numpy()),
                     flush=True,
                     file=kwargs['log'][0])
 
@@ -828,89 +825,119 @@ class Processor:
 
         return
 
-    # TODO: complete the test routine
+
     def test(
         self,
+        rank,
+        world_size,
         save_dir,
         dataloader,
         **kwargs):
-        """Performs only the forward pass for inference.
-        """
+        """Performs only the forward pass for inference."""
 
         # set layers to inference mode if behavior differs between train and prediction
         # (prepares Dropout and BatchNormalization layers to enable and to freeze parameters, respectively)
         self.model.eval()
 
-        # move the model to the compute device(s) if available (CPU, GPU, TPU, etc.)
-        if torch.cuda.device_count() > 1:
-            print("Using", torch.cuda.device_count(), "allocated GPUs", flush=True, file=kwargs['log'][0])
-            self.model = nn.DataParallel(self.model)
-        self.model.to(device)
-
         # test the model on the validation set
         top1_acc_val, top5_acc_val, f1_score, edit_score, confusion_matrix, ce_epoch_loss_val, mse_epoch_loss_val, duration_val = self.validate_(
             dataloader=dataloader,
             foo=self.forward_,
-            device=device,
             **kwargs)
 
-        # save all metrics
-        pd.DataFrame(torch.stack((torch.tensor(kwargs['iou_threshold'],dtype=torch.float32),f1_score.cpu())).numpy()).to_csv('{0}/macro-F1@k.csv'.format(save_dir))
-        pd.DataFrame(data={"top1": top1_acc_val, "top5": top5_acc_val}, index=[0]).to_csv('{0}/accuracy.csv'.format(save_dir))
-        pd.DataFrame(data={"edit": edit_score.cpu().numpy()}, index=[0]).to_csv('{0}/edit.csv'.format(save_dir))
-        pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion-matrix.csv'.format(save_dir))
+        # gather val stats to the master node
+        if torch.cuda.is_available():
+            val_objects = {
+                "top1_acc_val": top1_acc_val,
+                "top5_acc_val": top5_acc_val,
+                "ce_epoch_loss_val": ce_epoch_loss_val,
+                "mse_epoch_loss_val": mse_epoch_loss_val,
+                "duration_val": duration_val}
 
-        # sweep through the sample trials
-        for i in [175, 293, 37]: # 39 (L=4718), 177 (L=6973), 299 (L=2378)
-            # save prediction and ground truth of reference samples
-            captures, labels = dataloader.dataset.__getitem__(i)
+            val_output = [None for _ in range(world_size)]
+            f1_scores = [torch.zeros(len(kwargs['iou_threshold']), device=self.rank, dtype=torch.float32) for _ in range(world_size)]
+            edit_scores = [torch.zeros(1, device=self.rank, dtype=torch.float32) for _ in range(world_size)]
+            confusion_matrices = [torch.zeros(self.num_classes, self.num_classes, device=self.rank, dtype=torch.int64) for _ in range(world_size)]
 
-            # move both data to the compute device
-            # (captures is a batch of full-length captures, label is a batch of ground truths)
-            captures, labels = captures[None].to(device), labels[None].to(device)
+            gather_object(val_objects, val_output if rank == 0 else None, dst=0)
+            gather(f1_score, f1_scores if rank == 0 else None, dst=0)
+            gather(edit_score, edit_scores if rank == 0 else None, dst=0)
+            gather(confusion_matrix, confusion_matrices if rank == 0 else None, dst=0)
+        
+        if rank == 0:
+            for i in range(1, world_size):
+                top1_acc_val += val_output[i]["top1_acc_val"]
+                top5_acc_val += val_output[i]["top5_acc_val"]
+                ce_epoch_loss_val += val_output[i]["ce_epoch_loss_val"]
+                mse_epoch_loss_val += val_output[i]["mse_epoch_loss_val"]
+                edit_score += edit_scores[i]
+                f1_score += f1_scores[i]
+                confusion_matrix += confusion_matrices[i]
 
-            top1_predicted = []
-            for segment_top1_predicted, _, _, _, _, _, _, _, _ in self.forward_(captures, labels, device=device, **kwargs):
-                top1_predicted.append(segment_top1_predicted)
+            top1_acc_val /= world_size
+            top5_acc_val /= world_size
+            edit_score /= world_size
+            f1_score /= world_size
+        
+        # record all stats of interest for logging/notification (on master node only if using GPUs)
+        if not torch.cuda.is_available() or rank==0:
+            # save all metrics
+            pd.DataFrame(torch.stack((torch.tensor(kwargs['iou_threshold'],dtype=torch.float32),f1_score.cpu())).numpy()).to_csv('{0}/macro-F1@k.csv'.format(save_dir))
+            pd.DataFrame(data={"top1": top1_acc_val, "top5": top5_acc_val}, index=[0]).to_csv('{0}/accuracy.csv'.format(save_dir))
+            pd.DataFrame(data={"edit": edit_score.cpu().numpy()}, index=[0]).to_csv('{0}/edit.csv'.format(save_dir))
+            pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion-matrix.csv'.format(save_dir))
 
-            pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}.csv'.format(save_dir, i))
+            # sweep through the sample trials
+            for i in kwargs["demo"]:
+                # save prediction and ground truth of reference samples
+                captures, labels = dataloader.dataset.__getitem__(i)
 
-        # log and send notifications
-        print(
-            "[test]: epoch_loss = {0}, top1_acc = {1}, top5_acc = {2}, f1@k = {3}, edit = {4}"
-            .format(
-                (ce_epoch_loss_val + mse_epoch_loss_val) / len(dataloader),
-                top1_acc_val,
-                top5_acc_val,
-                f1_score.cpu().numpy(),
-                edit_score),
-            flush=True,
-            file=kwargs['log'][0])
+                # move both data to the compute device
+                # (captures is a batch of full-length captures, label is a batch of ground truths)
+                captures, labels = captures[None].to(self.rank), labels[None].to(self.rank)
 
-        if kwargs['verbose'] > 0:
+                top1_predicted = []
+                for segment_top1_predicted, _, _, _, _, _, _, _, _ in self.forward_(captures, labels, **kwargs):
+                    top1_predicted.append(segment_top1_predicted)
+
+                pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}.csv'.format(save_dir, i))
+
+            # log and send notifications
             print(
-                "[test]: time = {1}"
-                .format(duration_val),
+                "[test]: epoch_loss = {0}, top1_acc = {1}, top5_acc = {2}, f1@k = {3}, edit = {4}"
+                .format(
+                    (ce_epoch_loss_val + mse_epoch_loss_val) / len(dataloader),
+                    top1_acc_val,
+                    top5_acc_val,
+                    f1_score.cpu().numpy(),
+                    edit_score.cpu().numpy()),
                 flush=True,
                 file=kwargs['log'][0])
 
-        # format a stats table (in newest to oldest order) and send it as email update
-        if kwargs['verbose'] > 1:
-            os.system(
-                'header="\n %-5s %5s %5s\n";'
-                'format=" %-1.4f %1.4f %5.6f\n";'
-                'printf "$header" "TOP1" "TOP5" "TIME" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
-                'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
-                'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: status update" {2}'
-                .format(
-                    ' '.join([
-                        ' '.join([str(e) for e in t]) for t 
-                        in zip(
-                            top1_acc_val,
-                            top5_acc_val,
-                            duration_val)]),
-                    '_'.join([kwargs['model'], 'red' if kwargs['model'] == 'original' and kwargs['latency'] else '', *kwargs['jobname']]),
-                    kwargs['email']))
+            if kwargs['verbose'] > 0:
+                print(
+                    "[test]: time = {1}"
+                    .format(duration_val),
+                    flush=True,
+                    file=kwargs['log'][0])
+
+            # format a stats table (in newest to oldest order) and send it as email update
+            if kwargs['verbose'] > 1:
+                os.system(
+                    'header="\n %-5s %5s %5s\n";'
+                    'format=" %-1.4f %1.4f %5.6f\n";'
+                    'printf "$header" "TOP1" "TOP5" "TIME" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
+                    'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
+                    'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: status update" {2}'
+                    .format(
+                        ' '.join([
+                            ' '.join([str(e) for e in t]) for t 
+                            in zip(
+                                top1_acc_val,
+                                top5_acc_val,
+                                duration_val)]),
+                        '_'.join([kwargs['model'], 'red' if kwargs['model'] == 'original' and kwargs['latency'] else '', *kwargs['jobname']]),
+                        kwargs['email']))
         return
 
     # TODO: complete the benchmark routine

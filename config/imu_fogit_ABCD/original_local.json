@@ -35,13 +35,14 @@
     },
     "optimizer": {
         "seed": 1538574472,
-        "epochs": 100,
-        "checkpoints": [9,19,29,39,49,59,69,79,89],
+        "epochs": 5,
+        "checkpoints": [0,1,2,3,4],
         "learning_rate": 0.0005,
         "learning_rate_decay": 1.0,
         "batch_size": 64
     },
     "job": {
-        "email": "maxim.yudayev@kuleuven.be"
+        "email": "maxim.yudayev@kuleuven.be",
+        "demo": []
     }
 }
