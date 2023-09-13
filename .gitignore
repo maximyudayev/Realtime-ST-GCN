@@ -5,13 +5,22 @@ debug
 # exact directories
 .vscode/*
 data/*
+data/pku-mmdv1/*
+# data/pku-mmdv1-subset/*
+data/pku-mmdv2/*
+data/imu_fogit_ABCD/*
+
 pretrained_models/*
-pretrained_models/pku-mmd/*
 .ipynb_checkpoints/
 
 # exceptions
 !data/skeletons
-!pretrained_models/pku-mmd/
+!data/pku-mmdv1
+# !data/pku-mmdv1-subset
+!data/pku-mmdv2
+!data/imu_fogit_ABCD
+!data/*/actions.txt
+
 !pretrained_models/**/train-validation-curve.ods
 !.vscode/launch.json
 
@@ -20,3 +29,4 @@ pretrained_models/pku-mmd/*
 
 # named files anywhere
 mail_draft*.txt
+temp.py
