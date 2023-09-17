@@ -17,7 +17,6 @@ import os
 import random
 import time
 import json
-from datetime import datetime
 
 
 def common(rank: int, world_size: int, args):
@@ -54,7 +53,7 @@ def common(rank: int, world_size: int, args):
 
     # if using CUDA, initialize process group for DDP
     if torch.cuda.is_available():
-        # TODO: use IP and port information from SLURM
+        # TODO: use IP and port information from SLURM when using multiple nodes
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = "12355"
         init_process_group(backend="nccl", rank=rank, world_size=world_size)
@@ -88,18 +87,12 @@ def common(rank: int, world_size: int, args):
         with open(args.graph, 'r') as graph_file:
             graph = json.load(graph_file)
 
-        jobname = [args.command, str(args.kernel[0])]
-        if args.model == 'original':
-            jobname += [str(args.receptive_field)]
-        if args.command == 'train':
-            jobname += [str(args.batch_size), str(args.epochs)]
+        jobname = os.environ['SLURM_JOB_NAME'] if os.environ['SLURM_ARRAY_TASK_ID'] is None else os.environ['SLURM_JOB_NAME']+'_'+os.environ['SLURM_ARRAY_TASK_ID']
 
         # prepare a directory to store results
-        save_dir = "{0}/{1}/{2}_{3}".format(
+        save_dir = "{0}/{1}".format(
             args.out,
-            args.model + ('_red' if args.model == 'original' and args.latency else ''), 
-            '_'.join(jobname),
-            datetime.now().strftime('%d-%m-%y_%H:%M:%S'))
+            jobname)
 
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
@@ -220,7 +213,7 @@ def train(rank: int, world_size: int, args):
         if args.backup:
             backup_dir = "{0}/{1}".format(
                 args.backup,
-                '/'.join(save_dir.split('/')[-2:]))
+                args.jobname)
 
             if not os.path.exists(backup_dir):
                 os.makedirs(backup_dir)
@@ -239,7 +232,7 @@ def train(rank: int, world_size: int, args):
         os.system(
             'mail -s "[{0}]: COMPLETED" {1} <<< ""'
             .format(
-                '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
+                args.jobname,
                 args.email))
 
     # cleanup
@@ -297,7 +290,7 @@ def test(rank: int, world_size: int, args):
         if args.backup:
             backup_dir = "{0}/{1}".format(
                 args.backup,
-                '/'.join(save_dir.split('/')[-2:]))
+                args.jobname)
 
             if not os.path.exists(backup_dir):
                 os.makedirs(backup_dir)
@@ -313,7 +306,7 @@ def test(rank: int, world_size: int, args):
         os.system(
             'mail -s "[{0}]: COMPLETED" {1} <<< ""'
             .format(
-                '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
+                args.jobname,
                 args.email))
 
     # cleanup
@@ -379,7 +372,7 @@ def benchmark(rank: int, world_size: int, args):
     if args.backup:
         backup_dir = "{0}/{1}".format(
             args.backup,
-            '/'.join(save_dir.split('/')[-2:]))
+            args.jobname)
 
         if not os.path.exists(backup_dir):
             os.makedirs(backup_dir)
@@ -400,7 +393,7 @@ def benchmark(rank: int, world_size: int, args):
     os.system(
         'mail -s "[{0}]: COMPLETED" {1} <<< ""'
         .format(
-            '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
+            args.jobname,
             args.email))
 
     # cleanup

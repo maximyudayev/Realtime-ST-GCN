@@ -2,7 +2,34 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Train Original",
+            "name": "PKU-MMDv1 Train Original",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "train",
+                "--batch_size",
+                "64",
+                "--kernel",
+                "9",
+                "--receptive_field",
+                "300",
+                "--segment",
+                "100",
+                "--epochs",
+                "1",
+                // "--data",
+                // "data/pku-mmdv1-subset",
+                "--config",
+                "config/pku-mmd/original_local.json"
+            ],
+            "env": {
+                "SLURM_JOB_NAME": "train_$(date +'%d-%m-%y-%T')_pkummd_stgcn_9_300_1",
+            }
+        },
+        {
+            "name": "FOGIT Train Original",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
@@ -17,12 +44,18 @@
                 "300",
                 "--segment",
                 "100",
+                "--epochs",
+                "1",
                 "--config",
                 "config/imu_fogit_ABCD/original_local.json"
             ],
+            "env": {
+                "SLURM_JOB_NAME": "train_$(date +'%d-%m-%y-%T')_fogit_stgcn_9_300_1",
+                "SLURM_ARRAY_TASK_ID": "13",
+            }
         },
         {
-            "name": "Train Realtime",
+            "name": "PKU-MMDv1 Train Realtime",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
@@ -40,6 +73,34 @@
                 "--config",
                 "config/pku-mmd/realtime_local.json",
             ],
+            "env": {
+                "SLURM_JOB_NAME": "train_$(date +'%d-%m-%y-%T')_pkummd_rtstgcn_9_1",
+                "SLURM_ARRAY_TASK_ID": "13",
+            }
+        },
+        {
+            "name": "FOGIT Train Realtime",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "train",
+                "--batch_size",
+                "346",
+                "--kernel",
+                "9",
+                "--segment",
+                "100",
+                "--epochs",
+                "1",
+                "--config",
+                "config/imu_fogit_ABCD/realtime_local.json"
+            ],
+            "env": {
+                "SLURM_JOB_NAME": "train_$(date +'%d-%m-%y-%T')_fogit_rtstgcn_9_1",
+                "SLURM_ARRAY_TASK_ID": "13",
+            }
         },
         {
             "name": "Test Original",

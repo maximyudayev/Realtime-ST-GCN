@@ -1,29 +1,27 @@
-#!/bin/bash
+#!/bin/bash -l
 #SBATCH -A lp_stadius_fpga_ai
-#SBATCH --cluster=genius
+#SBATCH --cluster=wice
 #SBATCH --nodes=1
-#SBATCH --ntasks=36
+#SBATCH --ntasks-per-node=72
 #SBATCH --gpus-per-node=4
-#SBATCH --partition=gpu_p100_debug
-#SBATCH --mem-per-cpu=5000
+#SBATCH --partition=gpu
+#SBATCH --mem-per-cpu=7g
+#SBATCH --output=debug/%x.out
+#SBATCH --error=debug/%x.err
 
 #SBATCH --mail-type=FAIL,BEGIN,END
 #SBATCH --mail-user=maxim.yudayev@kuleuven.be
 
-# (1/1) Debug Full Skylake x4 P100 GPU node (requires 9 cores per gpu)
-# GPU partition
-# Skylake GPU nodes have 192GB
-# Debug specifier
-# Debug jobs limited to 30 min (max 1 debug job in the queue)
+# (1/4) Full Icelake x4 A100 GPU node (requires 18 cores per gpu)
+# GPU partition (3 day max walltime)
+# Icelake GPU nodes have 512GB
 
-mail -s "[$SLURM_JOB_NAME]: STARTED" maxim.yudayev@kuleuven.be <<< ""
+mail -s "[${SLURM_JOB_NAME}]: STARTED" maxim.yudayev@kuleuven.be <<< ""
 
 # Change directory to location from which task was submitted to queue: $VSC_DATA/...
 cd $SLURM_SUBMIT_DIR
 # Purge all existing software packages
 module purge
-
-export PATH="${VSC_DATA}/miniconda3/bin:${PATH}"
 
 source activate rt-st-gcn
 
