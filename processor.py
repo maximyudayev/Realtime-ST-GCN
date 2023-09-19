@@ -1,6 +1,6 @@
 import math
 import torch
-from torch.distributed import barrier, gather, gather_object
+from torch.distributed import barrier, reduce
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
@@ -552,7 +552,6 @@ class Processor:
 
     def train(
         self,
-        rank,
         world_size,
         save_dir, 
         train_dataloader,
@@ -580,7 +579,7 @@ class Processor:
             range_epochs = range(epochs)
 
         # variables for email updates
-        if not torch.cuda.is_available() or rank==0:
+        if not torch.cuda.is_available() or self.rank==0:
             epoch_list = []
 
             top1_acc_train_list = []
@@ -619,7 +618,12 @@ class Processor:
             # clear the gradients before next epoch
             self.optimizer.zero_grad()
 
-            top1_correct, top5_correct, total, ce_epoch_loss_train, mse_epoch_loss_train = self.train_(train_dataloader, **kwargs)
+            top1_correct_train, top5_correct_train, total_train, ce_epoch_loss_train, mse_epoch_loss_train = self.train_(train_dataloader, **kwargs)
+
+            loss_train = torch.tensor([ce_epoch_loss_train, mse_epoch_loss_train], device=self.rank)
+            top1_correct_train = torch.tensor([top1_correct_train], device=self.rank)
+            top5_correct_train = torch.tensor([top5_correct_train], device=self.rank)
+            total_train = torch.tensor([total_train], device=self.rank)
 
             if self.rank == 0:
                 epoch_end_time = time.time()
@@ -627,35 +631,22 @@ class Processor:
             
             # gather train stats to the master node
             if torch.cuda.is_available():
-                train_objects = {
-                    "top1_correct": top1_correct,
-                    "top5_correct": top5_correct,
-                    "total": total, 
-                    "ce_epoch_loss_train": ce_epoch_loss_train,
-                    "mse_epoch_loss_train": mse_epoch_loss_train}
-
-                train_output = [None for _ in range(world_size)]
-
-                gather_object(train_objects, train_output if rank == 0 else None, dst=0)
-            
-            if rank == 0:
-                for obj in train_output[1:]:
-                    top1_correct += obj["top1_correct"]
-                    top5_correct += obj["top5_correct"]
-                    total += obj["total"]
-                    ce_epoch_loss_train += obj["ce_epoch_loss_train"]
-                    mse_epoch_loss_train += obj["mse_epoch_loss_train"]
+                reduce(loss_train, dst=0, op=torch.distributed.ReduceOp.SUM)
+                reduce(top1_correct_train, dst=0, op=torch.distributed.ReduceOp.SUM)
+                reduce(top5_correct_train, dst=0, op=torch.distributed.ReduceOp.SUM)
+                reduce(total_train, dst=0, op=torch.distributed.ReduceOp.SUM)
 
             # checkpoint the model during training at specified epochs
-            if epoch in checkpoints and ((self.rank == 0 and torch.cuda.is_available()) or not torch.cuda.is_available()):
+            if (epoch in checkpoints) and ((self.rank == 0 and torch.cuda.is_available()) or not torch.cuda.is_available()):
                 torch.save({
                     "epoch": epoch,
                     "model_state_dict": self.model.module.state_dict(),
                     "optimizer_state_dict": self.optimizer.state_dict(),
-                    "loss": (ce_epoch_loss_train + mse_epoch_loss_train) / len(train_dataloader),
+                    "loss": loss_train.sum() / (len(train_dataloader) * 1 if world_size is None else world_size),
                     }, "{0}/epoch-{1}.pt".format(save_dir, epoch))
-            if torch.cuda.is_available():
-                barrier()
+            
+            # if torch.cuda.is_available():
+            #     barrier()
 
             # set layers to inference mode if behavior differs between train and prediction
             # (prepares Dropout and BatchNormalization layers to enable and to freeze parameters, respectively)
@@ -670,65 +661,50 @@ class Processor:
                 foo=self.forward_,
                 **kwargs)
 
+            loss_val = torch.tensor([ce_epoch_loss_val, mse_epoch_loss_val], device=self.rank)
+            top1_acc_val = torch.tensor([top1_acc_val], device=self.rank)
+            top5_acc_val = torch.tensor([top5_acc_val], device=self.rank)
+
             # gather val stats to the master node
             if torch.cuda.is_available():
-                val_objects = {
-                    "top1_acc_val": top1_acc_val,
-                    "top5_acc_val": top5_acc_val,
-                    "ce_epoch_loss_val": ce_epoch_loss_val,
-                    "mse_epoch_loss_val": mse_epoch_loss_val,
-                    "duration_val": duration_val}
+                reduce(loss_val, dst=0, op=torch.distributed.ReduceOp.SUM)
+                reduce(top1_acc_val, dst=0, op=torch.distributed.ReduceOp.SUM)
+                reduce(top5_acc_val, dst=0, op=torch.distributed.ReduceOp.SUM)
+                reduce(f1_score, dst=0, op=torch.distributed.ReduceOp.SUM)
+                reduce(edit_score, dst=0, op=torch.distributed.ReduceOp.SUM)
+                reduce(confusion_matrix, dst=0, op=torch.distributed.ReduceOp.SUM)
 
-                val_output = [None for _ in range(world_size)]
-                f1_scores = [torch.zeros(len(kwargs['iou_threshold']), device=self.rank, dtype=torch.float32) for _ in range(world_size)]
-                edit_scores = [torch.zeros(1, device=self.rank, dtype=torch.float32) for _ in range(world_size)]
-                confusion_matrices = [torch.zeros(self.num_classes, self.num_classes, device=self.rank, dtype=torch.int64) for _ in range(world_size)]
-
-                gather_object(val_objects, val_output if rank == 0 else None, dst=0)
-                gather(f1_score, f1_scores if rank == 0 else None, dst=0)
-                gather(edit_score, edit_scores if rank == 0 else None, dst=0)
-                gather(confusion_matrix, confusion_matrices if rank == 0 else None, dst=0)
-            
-            if rank == 0:
-                for i in range(1, world_size):
-                    top1_acc_val += val_output[i]["top1_acc_val"]
-                    top5_acc_val += val_output[i]["top5_acc_val"]
-                    ce_epoch_loss_val += val_output[i]["ce_epoch_loss_val"]
-                    mse_epoch_loss_val += val_output[i]["mse_epoch_loss_val"]
-                    edit_score += edit_scores[i]
-                    f1_score += f1_scores[i]
-                    confusion_matrix += confusion_matrices[i]
-
+                # average values that need to be averaged
                 top1_acc_val /= world_size
                 top5_acc_val /= world_size
-                edit_score /= world_size
                 f1_score /= world_size
+                edit_score /= world_size
             
             # record all stats of interest for logging/notification (on master node only if using GPUs)
-            if not torch.cuda.is_available() or rank==0:
-                top1_acc_train = top1_correct / total
-                top5_acc_train = top5_correct / total
+            if not torch.cuda.is_available() or self.rank==0:
+                top1_acc_train = top1_correct_train / total_train
+                top5_acc_train = top5_correct_train / total_train
                 
                 epoch_list.insert(0, epoch)
 
-                ce_loss_train_list.insert(0, ce_epoch_loss_train / len(train_dataloader))
-                mse_loss_train_list.insert(0, mse_epoch_loss_train / len(train_dataloader))
-                epoch_loss_train_list.insert(0, (ce_epoch_loss_train + mse_epoch_loss_train) / len(train_dataloader))
+                ce_loss_train_list.insert(0, (loss_train[0] / (len(train_dataloader) * 1 if world_size is None else world_size)).cpu().item())
+                mse_loss_train_list.insert(0, (loss_train[1] / (len(train_dataloader) * 1 if world_size is None else world_size)).cpu().item())
+                epoch_loss_train_list.insert(0, (loss_train.sum() / (len(train_dataloader) * 1 if world_size is None else world_size)).cpu().item())
 
-                ce_loss_val_list.insert(0, ce_epoch_loss_val / len(val_dataloader))
-                mse_loss_val_list.insert(0, mse_epoch_loss_val / len(val_dataloader))
-                epoch_loss_val_list.insert(0, (ce_epoch_loss_val + mse_epoch_loss_val) / len(val_dataloader))
+                ce_loss_val_list.insert(0, (loss_val[0] / (len(val_dataloader) * 1 if world_size is None else world_size)).cpu().item())
+                mse_loss_val_list.insert(0, (loss_val[1] / (len(val_dataloader) * 1 if world_size is None else world_size)).cpu().item())
+                epoch_loss_val_list.insert(0, (loss_val.sum() / (len(val_dataloader) * 1 if world_size is None else world_size)).cpu().item())
 
-                top1_acc_train_list.insert(0, top1_acc_train)
-                top1_acc_val_list.insert(0, top1_acc_val)
-                top5_acc_train_list.insert(0, top5_acc_train)
-                top5_acc_val_list.insert(0, top5_acc_val)
+                top1_acc_train_list.insert(0, (top1_acc_train).cpu().item())
+                top1_acc_val_list.insert(0, (top1_acc_val).cpu().item())
+                top5_acc_train_list.insert(0, (top5_acc_train).cpu().item())
+                top5_acc_val_list.insert(0, (top5_acc_val).cpu().item())
                 duration_train_list.insert(0, duration_train)
                 duration_val_list.insert(0, duration_val)
  
                 # save all metrics
-                pd.DataFrame(torch.stack((torch.tensor(kwargs['iou_threshold'],dtype=torch.float32),f1_score.cpu())).numpy()).to_csv('{0}/macro-F1@k.csv'.format(save_dir))
-                pd.DataFrame(data={"top1": top1_acc_val, "top5": top5_acc_val}, index=[0]).to_csv('{0}/accuracy.csv'.format(save_dir))
+                pd.DataFrame(torch.stack((torch.tensor(kwargs['iou_threshold'], dtype=torch.float32), f1_score.cpu())).numpy()).to_csv('{0}/macro-F1@k.csv'.format(save_dir))
+                pd.DataFrame(data={"top1": top1_acc_val.cpu().numpy(), "top5": top5_acc_val.cpu().numpy()}, index=[0,1]).to_csv('{0}/accuracy.csv'.format(save_dir))
                 pd.DataFrame(data={"edit": edit_score.cpu().numpy()}, index=[0]).to_csv('{0}/edit.csv'.format(save_dir))
                 pd.DataFrame(confusion_matrix.cpu().numpy()).to_csv('{0}/confusion-matrix.csv'.format(save_dir))
 
@@ -749,14 +725,15 @@ class Processor:
 
                 # log and send notifications
                 print(
-                    "[epoch {0}]: epoch_loss = {1}, top1_acc_train = {2}, top5_acc_train = {3}, top1_acc_val = {4}, top5_acc_val = {5}, f1@k = {6}, edit = {7}"
+                    "[epoch {0}]: epoch_train_loss = {1}, epoch_val_loss = {2}, top1_acc_train = {3}, top5_acc_train = {4}, top1_acc_val = {5}, top5_acc_val = {6}, f1@k = {7}, edit = {8}"
                     .format(
                         epoch, 
-                        (ce_epoch_loss_train + mse_epoch_loss_train) / len(train_dataloader),
-                        top1_acc_train,
-                        top5_acc_train,
-                        top1_acc_val,
-                        top5_acc_val,
+                        (loss_train.sum() / (len(train_dataloader) * 1 if world_size is None else world_size)).cpu().numpy(),
+                        (loss_val.sum() / (len(val_dataloader) * 1 if world_size is None else world_size)).cpu().numpy(),
+                        top1_acc_train.cpu().numpy(),
+                        top5_acc_train.cpu().numpy(),
+                        top1_acc_val.cpu().numpy(),
+                        top5_acc_val.cpu().numpy(),
                         f1_score.cpu().numpy(),
                         edit_score.cpu().numpy()),
                     flush=True,
@@ -775,11 +752,11 @@ class Processor:
                 # format a stats table (in newest to oldest order) and send it as email update
                 if kwargs['verbose'] > 1:
                     os.system(
-                        'header="\n %-6s %5s %11s %11s %9s %9s %11s %9s\n";'
-                        'format=" %-03d %4.6f %1.4f %1.4f %1.4f %1.4f %5.6f %5.6f\n";'
-                        'printf "$header" "EPOCH" "LOSS" "TOP1_TRAIN" "TOP5_TRAIN" "TOP1_VAL" "TOP5_VAL" "TIME_TRAIN" "TIME_VAL" > $PBS_O_WORKDIR/mail_draft_{1}.txt;'
-                        'printf "$format" {0} >> $PBS_O_WORKDIR/mail_draft_{1}.txt;'
-                        'cat $PBS_O_WORKDIR/mail_draft_{1}.txt | mail -s "[{1}]: status update" {2}'
+                        'header="\n %-6s %11s %9s %11s %11s %9s %9s %11s %9s\n";'
+                        'format=" %-03d %4.6f %4.6f %1.4f %1.4f %1.4f %1.4f %5.6f %5.6f\n";'
+                        'printf "$header" "EPOCH" "LOSS_TRAIN" "LOSS_VAL" "TOP1_TRAIN" "TOP5_TRAIN" "TOP1_VAL" "TOP5_VAL" "TIME_TRAIN" "TIME_VAL" > $SLURM_SUBMIT_DIR/mail_draft_{1}.txt;'
+                        'printf "$format" {0} >> $SLURM_SUBMIT_DIR/mail_draft_{1}.txt;'
+                        'cat $SLURM_SUBMIT_DIR/mail_draft_{1}.txt | mail -s "[{1}]: status update" {2}'
                         .format(
                             ' '.join([
                                 ' '.join([str(e) for e in t]) for t 
@@ -792,7 +769,7 @@ class Processor:
                                     top5_acc_val_list,
                                     duration_train_list,
                                     duration_val_list)]),
-                            '_'.join([kwargs['model'], 'red' if kwargs['model'] == 'original' and kwargs['latency'] else '', *kwargs['jobname']]),
+                            kwargs['jobname'],
                             kwargs['email']))
 
                 # save (update) train-validation curve as a CSV file after each epoch
@@ -814,18 +791,18 @@ class Processor:
                     }).to_csv('{0}/train-validation-curve.csv'.format(save_dir))
 
         # save the final model
-        if epoch in checkpoints and ((self.rank == 0 and torch.cuda.is_available()) or not torch.cuda.is_available()):
+        if (epoch in checkpoints) and ((self.rank == 0 and torch.cuda.is_available()) or not torch.cuda.is_available()):
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": self.model.module.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
-                "loss": (ce_epoch_loss_train + mse_epoch_loss_train) / len(train_dataloader),
+                "loss": loss_train.sum() / (len(train_dataloader) * 1 if world_size is None else world_size),
                 }, "{0}/final.pt".format(save_dir))
-        barrier()
+        # barrier()
 
         return
 
-
+    # TODO: update DDP `gather` calls with `reduce`, email notification and file saving
     def test(
         self,
         rank,

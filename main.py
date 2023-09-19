@@ -67,6 +67,8 @@ def common(rank: int, world_size: int, args):
         # TODO: use pin_memory to load each sample in corresponding GPU
         train_dataloader = DataLoader(train_data, batch_size=batch_size, sampler=train_sampler)
         val_dataloader = DataLoader(val_data, batch_size=batch_size, sampler=val_sampler)
+
+        print("[rank {0}]: SLURM_JOB_NAME={1}; SLURM_ARRAY_TASK_ID={2}; train={3}, test={4}".format(rank, os.environ['SLURM_JOB_NAME'], os.environ['SLURM_ARRAY_TASK_ID'], len(train_dataloader), len(val_dataloader)), flush=True, file=args.log[0])
     else:
         train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
         val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
@@ -106,17 +108,17 @@ def common(rank: int, world_size: int, args):
 
         # get class distribution
         class_dist = train_data.__get_distribution__(rank)
-        tensors = [class_dist]
+        tensors = [class_dist for _ in range(world_size)]
     elif rank != 0 and torch.cuda.is_available():
         objects = [None]
-        tensors = [None]
+        tensors = None
 
     # scatter results to all other GPUs
     if torch.cuda.is_available():
         output_list = [None]
         output_tensor = torch.zeros(len(actions_dict), device=rank)
         scatter_object_list(output_list, objects*world_size, src=0)
-        scatter(output_tensor, tensors*world_size, src=0)
+        scatter(output_tensor, tensors, src=0)
         return train_dataloader, val_dataloader, output_tensor, output_list[0]["graph"], actions_dict, output_list[0]["save_dir"], output_list[0]["jobname"]
     else:
         return train_dataloader, val_dataloader, class_dist, graph, actions_dict, save_dir, jobname
@@ -199,7 +201,6 @@ def train(rank: int, world_size: int, args):
     # perform the training
     # (the model is trained on all skeletons in the scene, simultaneously)
     trainer.train(
-        rank=rank,
         world_size=world_size,
         save_dir=save_dir,
         train_dataloader=train_dataloader,
@@ -277,7 +278,6 @@ def test(rank: int, world_size: int, args):
 
     # perform the testing
     trainer.test(
-        rank=rank,
         world_size=world_size,
         save_dir=save_dir,
         dataloader=val_dataloader,

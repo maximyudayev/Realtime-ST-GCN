@@ -5,7 +5,7 @@
 #SBATCH --ntasks-per-node=72
 #SBATCH --gpus-per-node=4
 #SBATCH --partition=gpu
-#SBATCH --mem-per-cpu=7g
+#SBATCH --mem-per-cpu=7000
 #SBATCH --output=debug/%x.out
 #SBATCH --error=debug/%x.err
 

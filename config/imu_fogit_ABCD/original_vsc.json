@@ -12,7 +12,7 @@
         "stages": 1,
         "layers": [9],
         "kernel": [9],
-        "segment": 100,
+        "segment": 300,
         "latency": false,
         "importance": true,
         "receptive_field": 300,
@@ -53,6 +53,6 @@
     },
     "job": {
         "email": "maxim.yudayev@kuleuven.be",
-        "demo": [33, 75, 60]
+        "demo": []
     }
 }

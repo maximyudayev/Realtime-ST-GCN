@@ -5,9 +5,9 @@
 #SBATCH --ntasks-per-node=32
 #SBATCH --gpus-per-node=8
 #SBATCH --partition=gpu_v100
-#SBATCH --mem-per-cpu=20g
-#SBATCH --output=debug/%x.out
-#SBATCH --error=debug/%x.err
+#SBATCH --mem-per-cpu=20000
+#SBATCH --output=debug/%x_%a.out
+#SBATCH --error=debug/%x_%a.err
 
 #SBATCH --mail-type=FAIL,BEGIN,END
 #SBATCH --mail-user=maxim.yudayev@kuleuven.be

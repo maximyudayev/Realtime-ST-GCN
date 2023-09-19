@@ -1,5 +1,53 @@
 {
     "version": "0.2.0",
+    "inputs": [
+        {
+            "id": "subject",
+            "description": "Subject for leave-one-subject-out training protocol",
+            "type": "pickString",
+            "options": [
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "10",
+                "11",
+                "12",
+                "13"
+            ],
+            "default": "13"
+        },
+        {
+            "id": "kernel",
+            "description": "Temporal kernel size",
+            "type": "promptString",
+            "default": "9"
+        },
+        {
+            "id": "receptive_field",
+            "description": "Receptive field size of the ST-GCN model",
+            "type": "promptString",
+            "default": "300"
+        },
+        {
+            "id": "batch_size",
+            "description": "Number of trials in the training set (run './local/fogit_setup.sh <subject_id> <kernel> <receptive_field> <epochs>' to get it)",
+            "type": "promptString",
+            "default": "346"
+        },
+        {
+            "id": "epochs",
+            "description": "Number of epochs to train for",
+            "type": "promptString",
+            "default": "1"
+        }
+
+    ],
     "configurations": [
         {
             "name": "PKU-MMDv1 Train Original",
@@ -23,10 +71,7 @@
                 // "data/pku-mmdv1-subset",
                 "--config",
                 "config/pku-mmd/original_local.json"
-            ],
-            "env": {
-                "SLURM_JOB_NAME": "train_$(date +'%d-%m-%y-%T')_pkummd_stgcn_9_300_1",
-            }
+            ]
         },
         {
             "name": "FOGIT Train Original",
@@ -37,22 +82,18 @@
             "args": [
                 "train",
                 "--batch_size",
-                "346",
+                "${input:batch_size}",
                 "--kernel",
-                "9",
+                "${input:kernel}",
                 "--receptive_field",
-                "300",
+                "${input:receptive_field}",
                 "--segment",
                 "100",
                 "--epochs",
-                "1",
+                "${input:epochs}",
                 "--config",
                 "config/imu_fogit_ABCD/original_local.json"
-            ],
-            "env": {
-                "SLURM_JOB_NAME": "train_$(date +'%d-%m-%y-%T')_fogit_stgcn_9_300_1",
-                "SLURM_ARRAY_TASK_ID": "13",
-            }
+            ]
         },
         {
             "name": "PKU-MMDv1 Train Realtime",
@@ -72,11 +113,7 @@
                 // "pretrained_models/pku-mmd/realtime/train_9_64_50_23-02-23_22:55:53/epoch-49.pt",
                 "--config",
                 "config/pku-mmd/realtime_local.json",
-            ],
-            "env": {
-                "SLURM_JOB_NAME": "train_$(date +'%d-%m-%y-%T')_pkummd_rtstgcn_9_1",
-                "SLURM_ARRAY_TASK_ID": "13",
-            }
+            ]
         },
         {
             "name": "FOGIT Train Realtime",
@@ -96,11 +133,7 @@
                 "1",
                 "--config",
                 "config/imu_fogit_ABCD/realtime_local.json"
-            ],
-            "env": {
-                "SLURM_JOB_NAME": "train_$(date +'%d-%m-%y-%T')_fogit_rtstgcn_9_1",
-                "SLURM_ARRAY_TASK_ID": "13",
-            }
+            ]
         },
         {
             "name": "Test Original",
@@ -203,13 +236,13 @@
             "args": [
                 "train",
                 "--epochs",
-                "20", 
-                "--batch_size", 
-                "32", 
-                "--data", 
-                "/scratch/leuven/341/vsc34153/rt_st_gcn/data/pku-mmd-xsubject", 
-                "--out", 
-                "/scratch/leuven/341/vsc34153/rt_st_gcn/pretrained_models/pku-mmd-xsubject", 
+                "20",
+                "--batch_size",
+                "32",
+                "--data",
+                "/scratch/leuven/341/vsc34153/rt_st_gcn/data/pku-mmd-xsubject",
+                "--out",
+                "/scratch/leuven/341/vsc34153/rt_st_gcn/pretrained_models/pku-mmd-xsubject",
                 "--config",
                 "/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json"
             ],

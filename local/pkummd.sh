@@ -4,17 +4,19 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=36
 #SBATCH --gpus-per-node=4
-#SBATCH --partition=gpu_p100
-#SBATCH --mem-per-cpu=5000
+#SBATCH --partition=gpu_p100_debug
+#SBATCH --mem-per-cpu=5g
 #SBATCH --output=debug/%x.out
 #SBATCH --error=debug/%x.err
 
 #SBATCH --mail-type=FAIL,BEGIN,END
 #SBATCH --mail-user=maxim.yudayev@kuleuven.be
 
-# (1/20) Full Skylake x4 P100 GPU node (requires 9 cores per gpu)
-# GPU partition (gpu_p100 - 3 day max walltime; gpu_p100_long - 7 day max walltime)
+# (1/1) Debug Full Skylake x4 P100 GPU node (requires 9 cores per gpu)
+# GPU partition (gpu_p100_debug - 30 minute max walltime)
 # Skylake GPU nodes have 192GB
+# Debug specifier
+# Debug jobs limited to 30 min (max 1 debug job in the queue)
 
 mail -s "[${SLURM_JOB_NAME}]: STARTED" maxim.yudayev@kuleuven.be <<< ""
 
