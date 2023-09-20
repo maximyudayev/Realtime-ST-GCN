@@ -9,7 +9,7 @@ from processor import Processor
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group, scatter_object_list, scatter
+from torch.distributed import init_process_group, destroy_process_group, broadcast_object_list, broadcast
 
 import st_gcn_parser
 import argparse
@@ -51,11 +51,8 @@ def common(rank: int, world_size: int, args):
     # trials of different length can not be placed in the same tensor when batching, have to manually iterate over them
     batch_size = 1 if args.dataset_type == 'dir' else args.batch_size
 
-    # if using CUDA, initialize process group for DDP
+    # if using CUDA, initialize process group for DDP using environment variables from the SLURM job script
     if torch.cuda.is_available():
-        # TODO: use IP and port information from SLURM when using multiple nodes
-        os.environ["MASTER_ADDR"] = "localhost"
-        os.environ["MASTER_PORT"] = "12355"
         init_process_group(backend="nccl", rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
 
@@ -108,20 +105,16 @@ def common(rank: int, world_size: int, args):
 
         # get class distribution
         class_dist = train_data.__get_distribution__(rank)
-        tensors = [class_dist for _ in range(world_size)]
     elif rank != 0 and torch.cuda.is_available():
         objects = [None]
-        tensors = None
+        class_dist = torch.zeros(len(actions_dict), dtype=torch.float32, device=rank)
 
     # scatter results to all other GPUs
     if torch.cuda.is_available():
-        output_list = [None]
-        output_tensor = torch.zeros(len(actions_dict), device=rank)
-        scatter_object_list(output_list, objects*world_size, src=0)
-        scatter(output_tensor, tensors, src=0)
-        return train_dataloader, val_dataloader, output_tensor, output_list[0]["graph"], actions_dict, output_list[0]["save_dir"], output_list[0]["jobname"]
-    else:
-        return train_dataloader, val_dataloader, class_dist, graph, actions_dict, save_dir, jobname
+        broadcast_object_list(objects, src=0)
+        broadcast(class_dist, src=0)
+    
+    return train_dataloader, val_dataloader, class_dist, objects["graph"], actions_dict, objects["save_dir"], objects["jobname"]
 
 
 def build_model(rank: int, args):

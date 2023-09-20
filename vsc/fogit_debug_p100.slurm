@@ -18,6 +18,9 @@
 # Debug specifier
 # Debug jobs limited to 30 min (max 1 debug job in the queue)
 
+export MASTER_ADDR=$(scontrol show hostname ${SLURM_NODELIST} | head -n 1)
+export MASTER_PORT=12355
+
 if ["$SLURM_ARRAY_TASK_ID" == ""]
 then
     JOB="${SLURM_JOB_NAME}"

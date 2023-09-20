@@ -13,6 +13,8 @@ from torch.ao.quantization.quantize_fx import prepare_fx, convert_fx
 class Processor:
     """ST-GCN processing wrapper for training and testing the model.
 
+    NOTE: if using multi-GPU DDP setup, effective 'emulated' batch size is multiplied by `world_size` (for simpler code).
+
     TODO: update method descriptions
 
     Methods:
@@ -432,36 +434,34 @@ class Processor:
 
             # sweep through the validation dataset in minibatches
             # calculate IoU for the F1@k metrics
-            # NOTE: (assumes N=1)
-            for k, (captures, labels) in enumerate(dataloader):
-                # don't loop through entire dataset - useful to calibrate quantized model or to get the latency metric
-                if k == num_samples: break
-                
-                top1_predicted = []
-                for segment_top1_predicted, _, segment_labels, top1_cor, top5_cor, tot, ce, mse, lat in foo(captures, labels, **kwargs):
-                    N, _ = segment_labels.size()
+            with self.model.join():
+                for k, (captures, labels) in enumerate(dataloader):
+                    # don't loop through entire dataset - useful to calibrate quantized model or to get the latency metric
+                    if k == num_samples: break
+                    
+                    top1_predicted = []
+                    for segment_top1_predicted, _, _, top1_cor, top5_cor, tot, ce, mse, lat in foo(captures, labels, **kwargs):
+                        # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
+                        # which will then be averaged across the entire dataset size, since
+                        # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
+                        # (used for statistics)
+                        ce_epoch_loss_val += ce.data.item()
+                        mse_epoch_loss_val += mse.data.item()
 
-                    # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
-                    # which will then be averaged across the entire dataset size, since
-                    # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
-                    # (used for statistics)
-                    ce_epoch_loss_val += (ce*N).data.item()
-                    mse_epoch_loss_val += (mse*N).data.item()
+                        # evaluate the model
+                        top1_correct += top1_cor
+                        top5_correct += top5_cor
+                        total += tot
+                        top1_predicted.append(segment_top1_predicted)
+                    
+                    latency += lat if lat else 0
 
-                    # evaluate the model
-                    top1_correct += top1_cor
-                    top5_correct += top5_cor
-                    total += tot
-                    top1_predicted.append(segment_top1_predicted)
-                
-                latency += lat if lat else 0
+                    top1 = torch.concat(top1_predicted, dim=1)
+                    labels = labels.to(self.rank)
 
-                top1 = torch.concat(top1_predicted, dim=1)
-                labels = labels.to(self.rank)
-
-                f1[k] = self.f1_score(threshold, labels, top1)
-                edit[k] += self.edit_score(labels, top1)
-                confusion_matrix += self.confusion_matrix(labels, top1)
+                    f1[k] = self.f1_score(threshold, labels, top1)
+                    edit[k] += self.edit_score(labels, top1)
+                    confusion_matrix += self.confusion_matrix(labels, top1)
 
             test_end_time = time.time()
             duration = test_end_time - test_start_time
@@ -490,62 +490,61 @@ class Processor:
 
         # sweep through the training dataset in minibatches
         # TODO: make changes for file dataset type
-        # TODO: account for minibatch size after distributed sampler divided the dataset across multiple GPUs
-        for i, (captures, labels) in enumerate(dataloader):
-            N, _, _, _ = captures.size()
+        with self.model.join():
+            for i, (captures, labels) in enumerate(dataloader):
+                # generator that returns lazy iterator over segments of the trial to process long sequence in manageable overlapping chunks to fit in memory
+                for _, _, _, top1_cor, top5_cor, tot, ce, mse, _ in self.forward_(captures, labels, **kwargs):
+                    top1_correct += top1_cor
+                    top5_correct += top5_cor
+                    total += tot
 
-            # generator that returns lazy iterator over segments of the trial to process long sequence in manageable overlapping chunks to fit in memory
-            for _, _, _, top1_cor, top5_cor, tot, ce, mse, _ in self.forward_(captures, labels, **kwargs):
-                top1_correct += top1_cor
-                top5_correct += top5_cor
-                total += tot
+                    # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
+                    # which will then be averaged across the entire dataset size, since
+                    # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
+                    # (used for statistics)
+                    ce_epoch_loss_train += ce.data.item()
+                    mse_epoch_loss_train += mse.data.item()
 
-                # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
-                # which will then be averaged across the entire dataset size, since
-                # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
-                # (used for statistics)
-                ce_epoch_loss_train += (ce*N).data.item()
-                mse_epoch_loss_train += (mse*N).data.item()
+                    # loss is not a mean across minibatch for different-length trials -> needs averaging
+                    loss = ce + mse
+                    if (kwargs['dataset_type'] == 'dir' and
+                        (len(dataloader) % kwargs['batch_size'] == 0 or
+                        i < len(dataloader) - (len(dataloader) % kwargs['batch_size']))):
 
-                # loss is already a mean across minibatch for tensor of equally long trials, but
-                # not for different-length trials -> needs averaging
-                loss = ce + mse
-                if (kwargs['dataset_type'] == 'dir' and
-                    (len(dataloader) % kwargs['batch_size'] == 0 or
-                    i < len(dataloader) - (len(dataloader) % kwargs['batch_size']))):
+                        # if the minibatch is the same size as requested (first till one before last minibatch)
+                        # (because dataset is a multiple of batch size or if current minibatch is of requested size)
+                        loss /= kwargs['batch_size']
+                    elif (kwargs['dataset_type'] == 'dir'and 
+                        (len(dataloader) % kwargs['batch_size'] != 0 and
+                        i >= len(dataloader) - (len(dataloader) % kwargs['batch_size']))):
 
-                    # if the minibatch is the same size as requested (first till one before last minibatch)
-                    # (because dataset is a multiple of batch size or if current minibatch is of requested size)
-                    loss /= kwargs['batch_size']
-                elif (kwargs['dataset_type'] == 'dir'and 
-                    (len(dataloader) % kwargs['batch_size'] != 0 and
-                    i >= len(dataloader) - (len(dataloader) % kwargs['batch_size']))):
+                        # if the minibatch is smaller than requested (last minibatch or data partition is smaller than requested batch size)
+                        loss /= (len(dataloader) % kwargs['batch_size'])
 
-                    # if the minibatch is smaller than requested (last minibatch)
-                    loss /= (len(dataloader) % kwargs['batch_size'])
+                    print(
+                        "[rank {0}, trial {1}]: loss = {2}"
+                        .format(self.rank, i, loss),
+                        flush=True,
+                        file=kwargs['log'][0])
 
-                print(
-                    "[rank {6}, trial {0}]: ce = {1}, mse = {2}, loss = {3}, ce_epoch = {4}, mse_epoch = {5}"
-                    .format(i, ce, mse, loss, ce_epoch_loss_train, mse_epoch_loss_train, self.rank),
-                    flush=True,
-                    file=kwargs['log'][0])
+                    # backward pass to compute the gradients
+                    # NOTE: after each `backward()`, gradients are synchronized across ranks to ensure same state prior to optimization.
+                    # each rank contributes `1/world_size` to the gradient calculation
+                    loss.backward()
 
-                # backward pass to compute the gradients
-                loss.backward()
+                # zero the gradient buffers after every batch
+                # if dataset is a tensor with equal length trials, always enters
+                # if dataset is a set of different length trials, enters every `batch_size` iteration or during last incomplete batch
+                if ((kwargs['dataset_type'] == 'dir' and
+                        ((i + 1) % kwargs['batch_size'] == 0 or 
+                        (i + 1) == len(dataloader))) or
+                    (kwargs['dataset_type'] == 'file')):
 
-            # zero the gradient buffers after every batch
-            # if dataset is a tensor with equal length trials, always enters
-            # if dataset is a set of different length trials, enters every ``batch_size`` iteration
-            if ((kwargs['dataset_type'] == 'dir' and
-                    ((i + 1) % kwargs['batch_size'] == 0 or 
-                    (i + 1) == len(dataloader))) or
-                (kwargs['dataset_type'] == 'file')):
+                    # update parameters based on the computed gradients
+                    self.optimizer.step()
 
-                # update parameters based on the computed gradients
-                self.optimizer.step()
-
-                # clear the gradients
-                self.optimizer.zero_grad()
+                    # clear the gradients
+                    self.optimizer.zero_grad()
 
         return top1_correct, top5_correct, total, ce_epoch_loss_train, mse_epoch_loss_train
 
@@ -620,6 +619,12 @@ class Processor:
 
             top1_correct_train, top5_correct_train, total_train, ce_epoch_loss_train, mse_epoch_loss_train = self.train_(train_dataloader, **kwargs)
 
+            print(
+                "[rank {0}]: completed training"
+                .format(self.rank),
+                flush=True,
+                file=kwargs['log'][0])
+
             loss_train = torch.tensor([ce_epoch_loss_train, mse_epoch_loss_train], device=self.rank)
             top1_correct_train = torch.tensor([top1_correct_train], device=self.rank)
             top5_correct_train = torch.tensor([top5_correct_train], device=self.rank)
@@ -660,6 +665,12 @@ class Processor:
                 dataloader=val_dataloader,
                 foo=self.forward_,
                 **kwargs)
+
+            print(
+                "[rank {0}]: completed validation"
+                .format(self.rank),
+                flush=True,
+                file=kwargs['log'][0])
 
             loss_val = torch.tensor([ce_epoch_loss_val, mse_epoch_loss_val], device=self.rank)
             top1_acc_val = torch.tensor([top1_acc_val], device=self.rank)
