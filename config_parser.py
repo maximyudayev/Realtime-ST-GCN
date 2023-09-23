@@ -1,6 +1,5 @@
 import argparse
 import json
-import math
 
 
 class Parser(argparse.ArgumentParser):

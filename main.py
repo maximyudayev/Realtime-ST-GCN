@@ -1,124 +1,21 @@
 import torch
-from torch.utils.data import DataLoader
-from data_prep.dataset import SkeletonDataset, SkeletonDatasetFromDirectory
 from models.proposed.st_gcn import Model as RtStgcn
+from models.original.st_gcn import Model as Stgcn
 from models.proposed.st_gcn import AggregateStgcn, ObservedAggregateStgcn, QAggregateStgcn
-from models.original.st_gcn import Model as OriginalStgcn
-from processor import Processor
+from processor import Processor, setup, cleanup
+from config_parser import Parser
+from metrics import F1Score, EditScore, ConfusionMatrix
 
 import torch.multiprocessing as mp
-from torch.utils.data.distributed import DistributedSampler
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group, broadcast_object_list, broadcast
 
-import st_gcn_parser
 import argparse
 import os
 import random
 import time
-import json
 
 
-def common(rank: int, world_size: int, args):
-    """Performs setup common to any ST-GCN model variant.
-
-    Only needs to be invoked once for a given problem (train-test, benchmark, etc.). 
-    Corresponds to the parts of the pipeline irrespective of the black-box model used.
-    Creates DataLoaders, sets up processing device and random number generator,
-    reads action classes file.
-
-    TODO: use IP/port from SLURM to initialize DDP process group
-    TODO: use pin_memory to load data straight into corresponding GPU
-
-    Args:
-        args : ``dict``
-            Parsed CLI arguments.
-
-    Returns:
-        Dictionary of action classes.
-
-        Train and validation DataLoaders.
-    """
-
-    # preparing datasets for training and validation
-    if args.dataset_type == 'file':
-        train_data = SkeletonDataset('{0}/train_data.npy'.format(args.data), '{0}/train_label.pkl'.format(args.data), args.actions)
-        val_data = SkeletonDataset('{0}/val_data.npy'.format(args.data), '{0}/val_label.pkl'.format(args.data), args.actions)
-    elif args.dataset_type == 'dir':
-        train_data = SkeletonDatasetFromDirectory('{0}/train/features'.format(args.data), '{0}/train/labels'.format(args.data), args.actions)
-        val_data = SkeletonDatasetFromDirectory('{0}/val/features'.format(args.data), '{0}/val/labels'.format(args.data), args.actions)
-
-    # trials of different length can not be placed in the same tensor when batching, have to manually iterate over them
-    batch_size = 1 if args.dataset_type == 'dir' else args.batch_size
-
-    # if using CUDA, initialize process group for DDP using environment variables from the SLURM job script
-    if torch.cuda.is_available():
-        init_process_group(backend="nccl", rank=rank, world_size=world_size)
-        torch.cuda.set_device(rank)
-
-    # prepare the DataLoaders
-    if torch.cuda.is_available():
-        train_sampler = DistributedSampler(train_data, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
-        val_sampler = DistributedSampler(val_data, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
-        
-        # TODO: use pin_memory to load each sample in corresponding GPU
-        train_dataloader = DataLoader(train_data, batch_size=batch_size, sampler=train_sampler)
-        val_dataloader = DataLoader(val_data, batch_size=batch_size, sampler=val_sampler)
-
-        print("[rank {0}]: SLURM_JOB_NAME={1}; SLURM_ARRAY_TASK_ID={2}; train={3}, test={4}".format(rank, os.environ['SLURM_JOB_NAME'], os.environ['SLURM_ARRAY_TASK_ID'], len(train_dataloader), len(val_dataloader)), flush=True, file=args.log[0])
-    else:
-        train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-        val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
-
-    # extract actions from the label file
-    # NOTE: must be repeated by each process to create proper output tensor size for class distribution
-    with open(args.actions, 'r') as action_names:
-        actions = action_names.read().split('\n')
-
-    # 0th class is always background action
-    actions_dict = dict()
-    for i, action in enumerate(actions):
-        actions_dict[i+1] = action
-
-    # do some setup only on Master Node and scatter results to other GPUs
-    if rank == 0 or not torch.cuda.is_available():
-        # extract skeleton graph data
-        with open(args.graph, 'r') as graph_file:
-            graph = json.load(graph_file)
-
-        jobname = os.environ['SLURM_JOB_NAME'] if os.environ['SLURM_ARRAY_TASK_ID'] is None else os.environ['SLURM_JOB_NAME']+'_'+os.environ['SLURM_ARRAY_TASK_ID']
-
-        # prepare a directory to store results
-        save_dir = "{0}/{1}".format(
-            args.out,
-            jobname)
-
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-
-        # create object list for scattering across processes
-        objects = [{
-            "graph": graph,
-            "save_dir": save_dir,
-            "jobname": jobname       
-        }]
-
-        # get class distribution
-        class_dist = train_data.__get_distribution__(rank)
-    elif rank != 0 and torch.cuda.is_available():
-        objects = [None]
-        class_dist = torch.zeros(len(actions_dict), dtype=torch.float32, device=rank)
-
-    # scatter results to all other GPUs
-    if torch.cuda.is_available():
-        broadcast_object_list(objects, src=0)
-        broadcast(class_dist, src=0)
-    
-    return train_dataloader, val_dataloader, class_dist, objects["graph"], actions_dict, objects["save_dir"], objects["jobname"]
-
-
-def build_model(rank: int, args):
-    """Builds the selected ST-GCN model variant.
+def pick_model(args):
+    """Returns a constructor for the selected model variant.
 
     Args:
         args : ``dict``
@@ -126,12 +23,20 @@ def build_model(rank: int, args):
 
     Returns:
         PyTorch Model corresponding to the user-defined CLI parameters.
-
-    Raises:
-        ValueError:
-            If GCN parameter list sizes do not match the number of stages.
     """
 
+    if args.model == 'original':
+        model = Stgcn
+    else:
+        model = RtStgcn
+
+    return model
+
+
+def assert_parameters(args):
+    """Performs model and job configuration parameter checks."""
+
+    # TODO: do some desired parameter checking
     if (len(args.in_ch) != args.stages or
         len(args.out_ch) != args.stages or
         len(args.stride) != args.stages or
@@ -143,19 +48,7 @@ def build_model(rank: int, args):
         raise ValueError(
             'Selected the realtime model, but set buffer size to 1. '
             'Check your config file.')
-
-    if args.model == 'original':
-        model = OriginalStgcn(rank,**vars(args))
-    else:
-        # all 3 adapted versions are encapsulated in the same class, training is identical (batch mode),
-        # usecase changes applied during inference
-        model = RtStgcn(rank,**vars(args))
-
-    # if using GPUs, convert the created model into the DistributedDataParallel
-    if torch.cuda.is_available():
-        model = DDP(model.to(rank), device_ids=[rank])
-
-    return model
+    return None
 
 
 def train(rank: int, world_size: int, args):
@@ -166,52 +59,33 @@ def train(rank: int, world_size: int, args):
             Parsed CLI arguments.
     """
 
-    # perform common setup around the model's black box
-    train_dataloader, val_dataloader, class_dist, args.graph, actions, save_dir, args.jobname = common(rank, world_size, args)
-    
-    args.num_classes = len(actions)
+    # return reference to the user selected model constructor
+    Model = pick_model(args)
 
-    # construct the target model using the CLI arguments
-    model = build_model(rank, args)
-    # TODO: use barrier() to load checkpoint model to GPU and copy its initial state across GPUs
-    # load the checkpoint if not trained from scratch
-    # if args.checkpoint:
-    #     # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
-    #     model.load_state_dict({
-    #         k.split('module.')[1]: v 
-    #         for k, v in
-    #         torch.load(args.checkpoint)['model_state_dict'].items()})
+    # perform common setup around the model's black box
+    model, train_dataloader, val_dataloader, class_dist, args = setup(Model, rank, world_size, args)
+
+    # list metrics that Processor should record
+    metrics = [
+        F1Score(rank, args.num_classes, args.iou_threshold), 
+        EditScore(rank, args.num_classes),
+        ConfusionMatrix(rank, args.num_classes)]
 
     # construct a processing wrapper
-    trainer = Processor(model, args.num_classes, class_dist, rank)
-
-    if rank == 0 or not torch.cuda.is_available():
-        start_time = time.time()
-
-        # last dimension is the number of subjects in the scene (2 for datasets used)
-        print("Training started", flush=True, file=args.log[0])
+    processor = Processor(model, metrics, args.num_classes, class_dist, rank)
 
     # perform the training
     # (the model is trained on all skeletons in the scene, simultaneously)
-    trainer.train(
+    processor.train(
         world_size=world_size,
-        save_dir=save_dir,
+        save_dir=args.save_dir,
         train_dataloader=train_dataloader,
         val_dataloader=val_dataloader,
         **vars(args))
 
     if rank == 0 or not torch.cuda.is_available():
-        print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
-
         # copy over resulting files of interest into the $VSC_DATA persistent storage
         if args.backup:
-            backup_dir = "{0}/{1}".format(
-                args.backup,
-                args.jobname)
-
-            if not os.path.exists(backup_dir):
-                os.makedirs(backup_dir)
-
             for f in [
                 'accuracy-curve.csv',
                 'train-validation-curve.csv',
@@ -221,7 +95,7 @@ def train(rank: int, world_size: int, args):
                 'edit.csv',
                 'confusion-matrix.csv',
                 *['segmentation-{0}.csv'.format(i) for i in args.demo]]:
-                os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
+                os.system('cp {0}/{1} {2}'.format(args.save_dir, f, args.backup_dir))
 
         os.system(
             'mail -s "[{0}]: COMPLETED" {1} <<< ""'
@@ -229,10 +103,10 @@ def train(rank: int, world_size: int, args):
                 args.jobname,
                 args.email))
 
-    # cleanup
-    if torch.cuda.is_available(): destroy_process_group()
+    # perform common cleanup
+    cleanup()
 
-    return
+    return None
 
 
 def test(rank: int, world_size: int, args):
@@ -243,58 +117,39 @@ def test(rank: int, world_size: int, args):
             Parsed CLI arguments.
     """
 
-    # perform common setup around the model's black box
-    _, val_dataloader, class_dist, args.graph, actions, save_dir, args.jobname = common(rank, world_size, args)
-    
-    args.num_classes = len(actions)
+    # return reference to the user selected model constructor
+    Model = pick_model(args)
 
-    # construct the target model using the CLI arguments
-    model = build_model(rank, args)
-    # TODO: use barrier() to load checkpoint model to GPU and copy its initial state across GPUs
-    # load the checkpoint if not trained from scratch
-    # if args.checkpoint:
-    #     # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
-    #     model.load_state_dict({
-    #         k.split('module.')[1]: v 
-    #         for k, v in
-    #         torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+    # perform common setup around the model's black box
+    model, _, val_dataloader, class_dist, args = setup(Model, rank, world_size, args)
+
+    # list metrics that Processor should record
+    metrics = [
+        F1Score(rank, args.num_classes, args.iou_threshold), 
+        EditScore(rank, args.num_classes),
+        ConfusionMatrix(rank, args.num_classes)]
 
     # construct a processing wrapper
     # NOTE: uses class distribution from training set
-    trainer = Processor(model, args.num_classes, class_dist, rank)
-
-    if rank == 0 or not torch.cuda.is_available():
-        start_time = time.time()
-
-        # last dimension is the number of subjects in the scene (2 for datasets used)
-        print("Testing started", flush=True, file=args.log[0])
+    processor = Processor(model, metrics, args.num_classes, class_dist, rank)
 
     # perform the testing
-    trainer.test(
+    processor.test(
         world_size=world_size,
-        save_dir=save_dir,
+        save_dir=args.save_dir,
         dataloader=val_dataloader,
         **vars(args))
 
     if rank == 0 or not torch.cuda.is_available():
-        print("Testing completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
-
         # copy over resulting files of interest into the $VSC_DATA persistent storage
         if args.backup:
-            backup_dir = "{0}/{1}".format(
-                args.backup,
-                args.jobname)
-
-            if not os.path.exists(backup_dir):
-                os.makedirs(backup_dir)
-
             for f in [
                 'macro-F1@k.csv',
                 'accuracy.csv',
                 'edit.csv',
                 'confusion-matrix.csv',
                 *['segmentation-{0}.csv'.format(i) for i in args.demo]]:
-                os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
+                os.system('cp {0}/{1} {2}'.format(args.save_dir, f, args.backup_dir))
 
         os.system(
             'mail -s "[{0}]: COMPLETED" {1} <<< ""'
@@ -302,27 +157,25 @@ def test(rank: int, world_size: int, args):
                 args.jobname,
                 args.email))
 
-    # cleanup
-    if torch.cuda.is_available(): destroy_process_group()
+    # perform common cleanup
+    cleanup()
 
-    return
+    return None
 
 
 def benchmark(rank: int, world_size: int, args):
     """Entry point for benchmarking inference of a model.
 
     TODO: adapt for DDP.
+    TODO: add custom quantization conversion modules for ST-GCN
 
     Args:
         args : ``dict``
             Parsed CLI arguments.
     """
 
-    # perform common setup around the model's black box
-    # TODO: add entries for original ST-GCN modules
-    _, val_dataloader, class_dist, args.graph, actions, save_dir, args.jobname = common(rank, world_size, args)
-    
-    args.num_classes = len(actions)
+    # maps custom quantization replacement modules
+    # NOTE: currently only RT-ST-GCN is mapped
     args.prepare_dict = {
         "float_to_observed_custom_module_class": {
             "static": {
@@ -338,67 +191,84 @@ def benchmark(rank: int, world_size: int, args):
         }
     }
 
-    # construct the target model using the CLI arguments
-    model = build_model(rank, args)
-    # TODO: use barrier() to load checkpoint model to GPU and copy its initial state across GPUs
-    # load the checkpoint if not trained from scratch
-    # if args.checkpoint:
-    #     # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
-    #     model.load_state_dict({
-    #         (k.split('module.')[1] if k.split('.')[1] != 'edge_importance' else 'st_gcn.{0}.edge_importance'.format(k.split('.')[2])): v
-    #         for k, v in
-    #         torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+    # return reference to the user selected model constructor
+    Model = pick_model(args)
+    
+    # perform common setup around the model's black box
+    model, _, val_dataloader, class_dist, args = setup(Model, rank, world_size, args)
+
+    # list metrics that Processor should record
+    metrics = [
+        F1Score(rank, args.num_classes, args.iou_threshold), 
+        EditScore(rank, args.num_classes),
+        ConfusionMatrix(rank, args.num_classes)]
 
     # construct a processing wrapper
-    trainer = Processor(model, args.num_classes, class_dist, rank)
-
-    start_time = time.time()
-
-    # last dimension is the number of subjects in the scene (2 for datasets used)
-    print("Benchmarking started", flush=True, file=args.log[0])
+    processor = Processor(model, metrics, args.num_classes, class_dist, rank)
 
     # perform the testing
-    trainer.benchmark(save_dir, val_dataloader, **vars(args))
+    processor.benchmark(
+        args.save_dir, 
+        val_dataloader, 
+        **vars(args))
+    
+    if rank == 0 or not torch.cuda.is_available():
+        if args.backup:
+            for f in [
+                'accuracy.csv',
+                'loss.csv',
+                'macro-F1@k.csv',
+                'edit.csv',
+                'latency.csv',
+                'model-size.csv',
+                'confusion-matrix_fp32.csv',
+                'confusion-matrix_int8.csv',
+                *['segmentation-{0}_fp32.csv'.format(i) for i in args.demo],
+                *['segmentation-{0}_int8.csv'.format(i) for i in args.demo]]:
+                os.system('cp {0}/{1} {2}'.format(args.save_dir, f, args.backup_dir))
 
-    print("Benchmarking completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
+        os.system(
+            'mail -s "[{0}]: COMPLETED" {1} <<< ""'
+            .format(
+                args.jobname,
+                args.email))
 
-    if args.backup:
-        backup_dir = "{0}/{1}".format(
-            args.backup,
-            args.jobname)
+    # perform common cleanup
+    cleanup()
 
-        if not os.path.exists(backup_dir):
-            os.makedirs(backup_dir)
+    return None
 
-        for f in [
-            'accuracy.csv',
-            'loss.csv',
-            'macro-F1@k.csv',
-            'edit.csv',
-            'latency.csv',
-            'model-size.csv',
-            'confusion-matrix_fp32.csv',
-            'confusion-matrix_int8.csv',
-            *['segmentation-{0}_fp32.csv'.format(i) for i in args.demo],
-            *['segmentation-{0}_int8.csv'.format(i) for i in args.demo]]:
-            os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
 
-    os.system(
-        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
-        .format(
-            args.jobname,
-            args.email))
+def main(args):
+    """Entrypoint into the script that routes to the correct function."""
 
-    # cleanup
-    if torch.cuda.is_available(): destroy_process_group()
+    # check user inputs using user logic
+    assert_parameters(args)
 
-    return
+    # setting up random number generator for deterministic and meaningful benchmarking
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+
+    # enter the appropriate command
+    # will use all available GPUs for DistributedDataParallel model and spawn K processes, 1 for each GPU
+    # otherwise will run as a CPU model
+    if torch.cuda.is_available():
+        world_size = torch.cuda.device_count()
+        mp.spawn(args.func, args=(world_size, args), nprocs=world_size)
+    else:
+        args.func(None, None, args)
+
+    return None
 
 
 if __name__ == '__main__':
     # top-level custom CLI parser
     # TODO: add `required` parameters to sub-parsers, where needed
-    parser = st_gcn_parser.Parser(
+    # TODO: rename parameters for clarity (`checkpoint_indices` instead of `checkpoints`). (also update files in `./config` accordingly)
+    # TODO: make a list of reserved parameters/arguments to the script
+    parser = Parser(
         prog='main',
         description='Script for human action segmentation processing using ST-GCN networks.',
         epilog='TODO: add the epilog')
@@ -420,7 +290,6 @@ if __name__ == '__main__':
             \r\t[--stages STAGES]
             \r\t[--buffer BUFFER]
             \r\t[--kernel [KERNEL]]
-            \r\t[--segment SEGMENT]
             \r\t[--importance]
             \r\t[--latency]
             \r\t[--receptive_field FIELD]
@@ -434,14 +303,16 @@ if __name__ == '__main__':
             \r\t[--graph FILE]
 
             \r\t[--seed SEED]
+            \r\t[--segment SEGMENT_LENGTH]
             \r\t[--epochs EPOCHS]
-            \r\t[--checkpoints [CHECKPOINTS]]
+            \r\t[--checkpoint_indices [EPOCHS_TO_SAVE]]
             \r\t[--learning_rate RATE]
             \r\t[--learning_rate_decay RATE_DECAY]
             \r\t[--batch_size BATCH]
 
             \r\t[--data DATA_DIR]
             \r\t[--dataset_type TYPE]
+            \r\t[--train_strategy {split|loso}]
             \r\t[--actions FILE]
             \r\t[--out OUT_DIR]
             \r\t[--backup BACKUP_DIR]
@@ -1129,19 +1000,4 @@ if __name__ == '__main__':
     parser_benchmark.set_defaults(func=benchmark)
 
     # parse the arguments
-    args = parser.parse_args()
-
-    # setting up random number generator for deterministic and meaningful benchmarking
-    random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = True
-
-    # enter the appropriate command
-    # will use all available GPUs for DistributedDataParallel model and spawn K processes, 1 for each GPU
-    # otherwise will run as a CPU model
-    if torch.cuda.is_available():
-        world_size = torch.cuda.device_count()
-        mp.spawn(args.func, args=(world_size, args), nprocs=world_size)
-    else:
-        args.func(None, None, args)
+    main(parser.parse_args())
