@@ -21,7 +21,7 @@ Classes are decoupled for modularity and readability, with separation of concern
 - [ ] Clarify why RT ST-GCN can be trained as a Batch model and later just copy the learned parameters over.
 - [ ] Explain the training parallelization trick.
 - [ ] Propose a guideline on model type selection.
-- [ ] Split the processing infrastructure code from the usecase code as a standalone repository.
+- [x] Split the processing infrastructure code from the usecase code as a standalone repository.
 
 ## Future Directions
 - [ ] Write an article on accuracy improvement after the graph construction fix.

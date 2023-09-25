@@ -121,7 +121,7 @@ class F1Score(Metric):
         return None
     
     def save(self, save_dir, suffix):
-        pd.DataFrame(torch.stack(self.overlap, self.metric).cpu().numpy()).to_csv('{0}/macro-F1@k{1}.csv'.format(save_dir, suffix))
+        pd.DataFrame(torch.stack((self.overlap, self.metric)).cpu().numpy()).to_csv('{0}/macro-F1@k{1}.csv'.format(save_dir, suffix if suffix is not None else ""))
         return None
     
     def log(self):
@@ -173,7 +173,7 @@ class EditScore(Metric):
         return None
     
     def save(self, save_dir, suffix):
-        pd.DataFrame(data={"edit": self.metric.cpu().numpy()}, index=[0]).to_csv('{0}/edit{1}.csv'.format(save_dir, suffix))
+        pd.DataFrame(data={"edit": self.metric.cpu().numpy()}, index=[0]).to_csv('{0}/edit{1}.csv'.format(save_dir, suffix if suffix is not None else ""))
         return None
 
     def log(self):
@@ -208,7 +208,7 @@ class ConfusionMatrix(Metric):
         return None
 
     def save(self, save_dir, suffix):
-        pd.DataFrame(self.metric.cpu().numpy()).to_csv('{0}/confusion-matrix{1}.csv'.format(save_dir, suffix))
+        pd.DataFrame(self.metric.cpu().numpy()).to_csv('{0}/confusion-matrix{1}.csv'.format(save_dir, suffix if suffix is not None else ""))
         return None
 
     def log(self):

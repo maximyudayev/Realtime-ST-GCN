@@ -12,6 +12,7 @@ from data_prep.dataset import SkeletonDataset, SkeletonDatasetFromDirectory
 
 from torch.ao.quantization.quantize_fx import prepare_fx, convert_fx
 
+from contextlib import nullcontext
 import pandas as pd
 import json
 import time
@@ -107,7 +108,7 @@ def _get_skeleton_graph(args):
 
 def _makedirs(args):
     # retrieve the job name
-    jobname = os.environ['SLURM_JOB_NAME'] if os.environ['SLURM_ARRAY_TASK_ID'] is None else os.environ['SLURM_JOB_NAME']+'_'+os.environ['SLURM_ARRAY_TASK_ID']
+    jobname = os.getenv('SLURM_JOB_NAME') if os.getenv('SLURM_ARRAY_TASK_ID') is None else os.getenv('SLURM_JOB_NAME')+'_'+os.environ('SLURM_ARRAY_TASK_ID')
 
     # prepare a directory to store results
     save_dir = "{0}/{1}".format(
@@ -193,11 +194,11 @@ def setup(Model, rank: int, world_size: int, args):
         broadcast_object_list(objects, src=0)
         broadcast(class_dist, src=0)
 
-    # construct the target model using the user's CLI arguments and automatically convert the model to DDP if using GPUs
-    model = _build_model(Model, rank, args)
-
     args.num_classes = len(action_dict)
     args.graph, args.save_dir, args.backup_dir, args.jobname = objects[0].values()
+
+    # construct the target model using the user's CLI arguments and automatically convert the model to DDP if using GPUs
+    model = _build_model(Model, rank, args)
     
     return model, train_dataloader, val_dataloader, class_dist, args
 
@@ -233,7 +234,8 @@ class Processor:
         metrics,
         num_classes,
         class_dist,
-        rank):
+        rank,
+        world_size):
         """
         Instantiates weighted CE loss and MSE loss.
 
@@ -252,9 +254,13 @@ class Processor:
 
             rank : ``int``
                 Local GPU rank.
+
+            rank : ``int``
+                Number of total used GPUs.
         """
 
         self.rank = rank
+        self.world_size = world_size
         self.model = model
         self.metrics = metrics
         # CE guides model toward absolute correctness on single frame predictions
@@ -276,7 +282,7 @@ class Processor:
 
     def _update_lr(self, learning_rate, learning_rate_decay, epoch):
         """Decays learning rate monotonically by the provided factor.
-        
+
         TODO: replace with a PyTorch rate scheduler.
         """
 
@@ -317,26 +323,27 @@ class Processor:
             if log is not None:
                 log_list.append(log)
         if len(log_list):
-            return ", ".join([None, *log_list])
+            return ", ".join(["", *log_list])
         else:
             return ""
 
 
-    def _demo_segmentation_masks(self, demo, dataloader, save_dir, suffix, **kwargs):
-        # sweep through the sample trials
-        for i in demo:
-            # save prediction and ground truth of reference samples
-            captures, labels = dataloader.dataset.__getitem__(i)
+    def _demo_segmentation_masks(self, dataloader, suffix, demo, save_dir, **kwargs):
+        with torch.no_grad():
+            # sweep through the sample trials
+            for i in demo:
+                # save prediction and ground truth of reference samples
+                captures, labels = dataloader.dataset.__getitem__(i)
 
-            # move both data to the compute device
-            # (captures is a batch of full-length captures, label is a batch of ground truths)
-            captures, labels = captures[None].to(self.rank), labels[None].to(self.rank)
+                # move both data to the compute device
+                # (captures is a batch of full-length captures, label is a batch of ground truths)
+                captures, labels = captures[None].to(self.rank), labels[None].to(self.rank)
 
-            top1_predicted = []
-            for segment_top1_predicted, _, _, _, _, _, _, _, _ in self._forward(captures, labels, **kwargs):
-                top1_predicted.append(segment_top1_predicted)
+                top1_predicted = []
+                for segment_top1_predicted, _, _, _, _, _, _, _, _ in self._forward(captures, labels, **kwargs):
+                    top1_predicted.append(segment_top1_predicted)
 
-            pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}{2}.csv'.format(save_dir, i, suffix))
+                pd.DataFrame(torch.stack((labels[0], torch.concat(top1_predicted, dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}{2}.csv'.format(save_dir, i, suffix if suffix is not None else ""))
         return None
 
 
@@ -570,10 +577,10 @@ class Processor:
             latency = 0
 
             # forces early finished GPUs to wait for laggards to prevent hanging during load imbalance
-            with self.model.join():
+            with self.model.join() if torch.cuda.is_available() else nullcontext():
                 # clear and initialize user-defined metrics for the epoch
                 self._init_metrics(len(dataloader))
-                
+
                 # sweep through the validation dataset in minibatches
                 for k, (captures, labels) in enumerate(dataloader):
                     # don't loop through entire dataset - useful to calibrate quantized model or to get the latency metric
@@ -593,7 +600,7 @@ class Processor:
                         top5_correct += top5_cor
                         total += tot
                         top1_predicted.append(segment_top1_predicted)
-                    
+
                     latency += lat if lat else 0
 
                     top1 = torch.concat(top1_predicted, dim=1)
@@ -616,7 +623,7 @@ class Processor:
         dataloader,
         **kwargs):
         """Does one epoch of forward and backward passes on each minibatch in the dataloader.
-        
+
         TODO: make changes for file dataset type.
         """
 
@@ -629,7 +636,7 @@ class Processor:
 
         # sweep through the training dataset in minibatches
         # TODO: make changes for file dataset type
-        with self.model.join():
+        with self.model.join() if torch.cuda.is_available() else nullcontext():
             for i, (captures, labels) in enumerate(dataloader):
                 # generator that returns lazy iterator over segments of the trial to process long sequence in manageable overlapping chunks to fit in memory
                 for _, _, _, top1_cor, top5_cor, tot, ce, mse, _ in self._forward(captures, labels, **kwargs):
@@ -690,7 +697,6 @@ class Processor:
 
     def train(
         self,
-        world_size,
         save_dir, 
         train_dataloader,
         val_dataloader,
@@ -790,7 +796,7 @@ class Processor:
                     "epoch": epoch,
                     "model_state_dict": self.model.module.state_dict(),
                     "optimizer_state_dict": self.optimizer.state_dict(),
-                    "loss": loss_train.sum() / (len(train_dataloader) * 1 if world_size is None else world_size),
+                    "loss": loss_train.sum() / (len(train_dataloader) * 1 if self.world_size is None else self.world_size),
                     }, "{0}/epoch-{1}.pt".format(save_dir, epoch))
 
             # set layers to inference mode if behavior differs between train and prediction
@@ -824,23 +830,23 @@ class Processor:
                 self._reduce_metrics(dst=0)
 
                 # average values that need to be averaged
-                top1_acc_val /= world_size
-                top5_acc_val /= world_size
-            
+                top1_acc_val /= self.world_size
+                top5_acc_val /= self.world_size
+
             # record all stats of interest for logging/notification (on master node only if using GPUs)
             if not torch.cuda.is_available() or self.rank==0:
                 top1_acc_train = top1_correct_train / total_train
                 top5_acc_train = top5_correct_train / total_train
-                
+
                 epoch_list.insert(0, epoch)
 
-                ce_loss_train_list.insert(0, (loss_train[0] / (len(train_dataloader) * 1 if world_size is None else world_size)).cpu().item())
-                mse_loss_train_list.insert(0, (loss_train[1] / (len(train_dataloader) * 1 if world_size is None else world_size)).cpu().item())
-                epoch_loss_train_list.insert(0, (loss_train.sum() / (len(train_dataloader) * 1 if world_size is None else world_size)).cpu().item())
+                ce_loss_train_list.insert(0, (loss_train[0] / (len(train_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().item())
+                mse_loss_train_list.insert(0, (loss_train[1] / (len(train_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().item())
+                epoch_loss_train_list.insert(0, (loss_train.sum() / (len(train_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().item())
 
-                ce_loss_val_list.insert(0, (loss_val[0] / (len(val_dataloader) * 1 if world_size is None else world_size)).cpu().item())
-                mse_loss_val_list.insert(0, (loss_val[1] / (len(val_dataloader) * 1 if world_size is None else world_size)).cpu().item())
-                epoch_loss_val_list.insert(0, (loss_val.sum() / (len(val_dataloader) * 1 if world_size is None else world_size)).cpu().item())
+                ce_loss_val_list.insert(0, (loss_val[0] / (len(val_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().item())
+                mse_loss_val_list.insert(0, (loss_val[1] / (len(val_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().item())
+                epoch_loss_val_list.insert(0, (loss_val.sum() / (len(val_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().item())
 
                 top1_acc_train_list.insert(0, (top1_acc_train).cpu().item())
                 top1_acc_val_list.insert(0, (top1_acc_val).cpu().item())
@@ -851,18 +857,18 @@ class Processor:
  
                 # save all metrics
                 pd.DataFrame(data={"top1": top1_acc_val.cpu().numpy(), "top5": top5_acc_val.cpu().numpy()}, index=[0,1]).to_csv('{0}/accuracy.csv'.format(save_dir))
-                
+
                 self._save_metrics(save_dir, None)
 
-                self._demo_segmentation_masks(kwargs["demo"], val_dataloader, save_dir, None)
+                self._demo_segmentation_masks(dataloader=val_dataloader, suffix=None, save_dir=save_dir, **kwargs)
 
                 # log and send notifications
                 print(
                     "[epoch {0}]: epoch_train_loss = {1}, epoch_val_loss = {2}, top1_acc_train = {3}, top5_acc_train = {4}, top1_acc_val = {5}, top5_acc_val = {6}{7}"
                     .format(
                         epoch, 
-                        (loss_train.sum() / (len(train_dataloader) * 1 if world_size is None else world_size)).cpu().numpy(),
-                        (loss_val.sum() / (len(val_dataloader) * 1 if world_size is None else world_size)).cpu().numpy(),
+                        (loss_train.sum() / (len(train_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().numpy(),
+                        (loss_val.sum() / (len(val_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().numpy(),
                         top1_acc_train.cpu().numpy(),
                         top5_acc_train.cpu().numpy(),
                         top1_acc_val.cpu().numpy(),
@@ -928,7 +934,7 @@ class Processor:
                 "epoch": epoch,
                 "model_state_dict": self.model.module.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
-                "loss": loss_train.sum() / (len(train_dataloader) * 1 if world_size is None else world_size),
+                "loss": loss_train.sum() / (len(train_dataloader) * 1 if self.world_size is None else self.world_size),
                 }, "{0}/final.pt".format(save_dir))
 
         if self.rank == 0 or not torch.cuda.is_available():
@@ -939,8 +945,6 @@ class Processor:
 
     def test(
         self,
-        rank,
-        world_size,
         save_dir,
         dataloader,
         **kwargs):
@@ -978,23 +982,23 @@ class Processor:
             self._reduce_metrics(dst=0)
 
             # average values that need to be averaged
-            top1_acc_val /= world_size
-            top5_acc_val /= world_size
-        
+            top1_acc_val /= self.world_size
+            top5_acc_val /= self.world_size
+
         # record all stats of interest for logging/notification (on master node only if using GPUs)
-        if not torch.cuda.is_available() or rank==0:
+        if not torch.cuda.is_available() or self.rank==0:
             # save all metrics
             pd.DataFrame(data={"top1": top1_acc_val.cpu().numpy(), "top5": top5_acc_val.cpu().numpy()}, index=[0,1]).to_csv('{0}/accuracy.csv'.format(save_dir))
-            
+
             self._save_metrics(save_dir, None)
 
-            self._demo_segmentation_masks(kwargs["demo"], dataloader, save_dir, None)
+            self._demo_segmentation_masks(dataloader=dataloader, suffix=None, save_dir=save_dir, **kwargs)
 
             # log and send notifications
             print(
                 "[test]: epoch_loss = {0}, top1_acc = {1}, top5_acc = {2}{3}"
                 .format(
-                    (loss_val.sum() / (len(dataloader) * 1 if world_size is None else world_size)).cpu().numpy(),
+                    (loss_val.sum() / (len(dataloader) * 1 if self.world_size is None else self.world_size)).cpu().numpy(),
                     top1_acc_val.cpu().numpy(),
                     top5_acc_val.cpu().numpy(),
                     self._log_metrics()),
@@ -1025,10 +1029,10 @@ class Processor:
                                 duration_val)]),
                         kwargs['jobname'],
                         kwargs['email']))
-        
+
         if self.rank == 0 or not torch.cuda.is_available():
             print("Testing completed in: {0}".format(time.time() - start_time), flush=True, file=kwargs["log"][0])
-        
+
         return None
 
 

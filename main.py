@@ -11,7 +11,6 @@ import torch.multiprocessing as mp
 import argparse
 import os
 import random
-import time
 
 
 def pick_model(args):
@@ -67,18 +66,16 @@ def train(rank: int, world_size: int, args):
 
     # list metrics that Processor should record
     metrics = [
-        F1Score(rank, args.num_classes, args.iou_threshold), 
-        EditScore(rank, args.num_classes),
-        ConfusionMatrix(rank, args.num_classes)]
+        F1Score(rank, world_size, args.num_classes, args.iou_threshold), 
+        EditScore(rank, world_size, args.num_classes),
+        ConfusionMatrix(rank, world_size, args.num_classes)]
 
     # construct a processing wrapper
-    processor = Processor(model, metrics, args.num_classes, class_dist, rank)
+    processor = Processor(model, metrics, args.num_classes, class_dist, rank, world_size)
 
     # perform the training
     # (the model is trained on all skeletons in the scene, simultaneously)
     processor.train(
-        world_size=world_size,
-        save_dir=args.save_dir,
         train_dataloader=train_dataloader,
         val_dataloader=val_dataloader,
         **vars(args))
@@ -131,12 +128,10 @@ def test(rank: int, world_size: int, args):
 
     # construct a processing wrapper
     # NOTE: uses class distribution from training set
-    processor = Processor(model, metrics, args.num_classes, class_dist, rank)
+    processor = Processor(model, metrics, args.num_classes, class_dist, rank, world_size)
 
     # perform the testing
     processor.test(
-        world_size=world_size,
-        save_dir=args.save_dir,
         dataloader=val_dataloader,
         **vars(args))
 
@@ -204,11 +199,10 @@ def benchmark(rank: int, world_size: int, args):
         ConfusionMatrix(rank, args.num_classes)]
 
     # construct a processing wrapper
-    processor = Processor(model, metrics, args.num_classes, class_dist, rank)
+    processor = Processor(model, metrics, args.num_classes, class_dist, rank, world_size)
 
     # perform the testing
     processor.benchmark(
-        args.save_dir, 
         val_dataloader, 
         **vars(args))
     
