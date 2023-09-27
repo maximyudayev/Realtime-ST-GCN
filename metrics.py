@@ -29,12 +29,12 @@ class Metric:
         edges_indices_shifted[-1] = L
 
         return edges_indices, edges_indices_shifted
-    
+
     def init_metric(self, num_trials):
         self.num_trials = num_trials
         self.trial_id = 0
         return None
-    
+
     def value(self):
         return self.metric
 
@@ -44,7 +44,7 @@ class Metric:
 
     def save(self, save_dir, suffix):
         raise NotImplementedError('Must override the `_save` method implementation for the custom metric.')
-    
+
     def log(self):
         raise NotImplementedError('Must override the `_log` method implementation for the custom metric.')
 
@@ -119,11 +119,11 @@ class F1Score(Metric):
         super().reduce(dst)
         self.metric /= self.world_size
         return None
-    
+
     def save(self, save_dir, suffix):
         pd.DataFrame(torch.stack((self.overlap, self.metric)).cpu().numpy()).to_csv('{0}/macro-F1@k{1}.csv'.format(save_dir, suffix if suffix is not None else ""))
         return None
-    
+
     def log(self):
         return "f1@k = {0}".format(self.metric.cpu().numpy())
 
@@ -171,7 +171,7 @@ class EditScore(Metric):
         super().reduce(dst)
         self.metric /= self.world_size
         return None
-    
+
     def save(self, save_dir, suffix):
         pd.DataFrame(data={"edit": self.metric.cpu().numpy()}, index=[0]).to_csv('{0}/edit{1}.csv'.format(save_dir, suffix if suffix is not None else ""))
         return None
@@ -201,7 +201,7 @@ class ConfusionMatrix(Metric):
             self.metric += torch.sum(top1_ohe, dim=0)
 
         return None
-    
+
     def init_metric(self, num_trials):
         super().init_metric(num_trials)
         self.metric = torch.zeros(self.num_classes, self.num_classes, device=self.rank, dtype=torch.int64)

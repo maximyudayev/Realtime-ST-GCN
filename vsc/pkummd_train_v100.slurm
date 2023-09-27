@@ -16,6 +16,9 @@
 # GPU partition (gpu_v100 - 3 day max walltime; gpu_v100_long - 7 day max walltime)
 # Cascadelake GPU nodes have 768GB
 
+export MASTER_ADDR=$(scontrol show hostname ${SLURM_NODELIST} | head -n 1)
+export MASTER_PORT=42069
+
 mail -s "[${SLURM_JOB_NAME}]: STARTED" maxim.yudayev@kuleuven.be <<< ""
 
 # Change directory to location from which task was submitted to queue: $VSC_DATA/...

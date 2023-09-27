@@ -66,7 +66,7 @@ def train(rank: int, world_size: int, args):
 
     # list metrics that Processor should record
     metrics = [
-        F1Score(rank, world_size, args.num_classes, args.iou_threshold), 
+        F1Score(rank, world_size, args.num_classes, args.iou_threshold),
         EditScore(rank, world_size, args.num_classes),
         ConfusionMatrix(rank, world_size, args.num_classes)]
 
@@ -122,7 +122,7 @@ def test(rank: int, world_size: int, args):
 
     # list metrics that Processor should record
     metrics = [
-        F1Score(rank, args.num_classes, args.iou_threshold), 
+        F1Score(rank, args.num_classes, args.iou_threshold),
         EditScore(rank, args.num_classes),
         ConfusionMatrix(rank, args.num_classes)]
 
@@ -188,13 +188,13 @@ def benchmark(rank: int, world_size: int, args):
 
     # return reference to the user selected model constructor
     Model = pick_model(args)
-    
+
     # perform common setup around the model's black box
     model, _, val_dataloader, class_dist, args = setup(Model, rank, world_size, args)
 
     # list metrics that Processor should record
     metrics = [
-        F1Score(rank, args.num_classes, args.iou_threshold), 
+        F1Score(rank, args.num_classes, args.iou_threshold),
         EditScore(rank, args.num_classes),
         ConfusionMatrix(rank, args.num_classes)]
 
@@ -203,9 +203,9 @@ def benchmark(rank: int, world_size: int, args):
 
     # perform the testing
     processor.benchmark(
-        val_dataloader, 
+        val_dataloader,
         **vars(args))
-    
+
     if rank == 0 or not torch.cuda.is_available():
         if args.backup:
             for f in [
@@ -489,6 +489,13 @@ if __name__ == '__main__':
         metavar='',
         help='number of captures to process in a minibatch (default: 16)')
     # IO arguments
+    parser_train_io.add_argument(
+        '--demo',
+        type=int,
+        nargs='*',
+        metavar='',
+        help='list of trial indices to demo segmentation masks for '
+            '(default: [])')
     parser_train_io.add_argument(
         '--data',
         metavar='',

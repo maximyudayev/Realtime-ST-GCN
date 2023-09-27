@@ -47,7 +47,7 @@ def _build_model(Model, rank: int, args):
 
 def _build_dataloader(rank, world_size, args):
     """Builds dataloaders that supply data in the format (N,C,L,V).
-    
+
     TODO: use pin_memory to load each sample directly in the corresponding GPU.
     """
 
@@ -70,7 +70,7 @@ def _build_dataloader(rank, world_size, args):
         # each epoch, the sets are shuffled and effectively all trials are used throughout training
         train_sampler = DistributedSampler(train_data, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
         val_sampler = DistributedSampler(val_data, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
-        
+
         # TODO: use pin_memory to load each sample directly in the corresponding GPU
         train_dataloader = DataLoader(train_data, batch_size=batch_size, sampler=train_sampler)
         val_dataloader = DataLoader(val_data, batch_size=batch_size, sampler=val_sampler)
@@ -96,7 +96,7 @@ def _get_action_classes(args):
 
 
 def _get_class_dist(dataloader, rank):
-    # TODO: verify that dataloader references the full dataset and not the sampled subset
+    # gets distribution of the complete dataset, not just the random sampled subset of DistributedSampler
     return dataloader.dataset.__get_distribution__(rank)
 
 
@@ -108,7 +108,7 @@ def _get_skeleton_graph(args):
 
 def _makedirs(args):
     # retrieve the job name
-    jobname = os.getenv('SLURM_JOB_NAME') if os.getenv('SLURM_ARRAY_TASK_ID') is None else os.getenv('SLURM_JOB_NAME')+'_'+os.environ('SLURM_ARRAY_TASK_ID')
+    jobname = os.getenv('SLURM_JOB_NAME') if os.getenv('SLURM_ARRAY_TASK_ID') is None else os.getenv('SLURM_JOB_NAME')+'_'+os.getenv('SLURM_ARRAY_TASK_ID')
 
     # prepare a directory to store results
     save_dir = "{0}/{1}".format(
@@ -172,7 +172,7 @@ def setup(Model, rank: int, world_size: int, args):
     # do some setup only on Master Node and scatter results to other GPUs
     if rank == 0 or not torch.cuda.is_available():
         graph = _get_skeleton_graph(args)
-        
+
         jobname, save_dir, backup_dir = _makedirs(args)
 
         # create object list for scattering across processes
@@ -180,7 +180,7 @@ def setup(Model, rank: int, world_size: int, args):
             "graph": graph,
             "save_dir": save_dir,
             "backup_dir": backup_dir,
-            "jobname": jobname       
+            "jobname": jobname
         }]
 
         # get class distribution
@@ -199,7 +199,7 @@ def setup(Model, rank: int, world_size: int, args):
 
     # construct the target model using the user's CLI arguments and automatically convert the model to DDP if using GPUs
     model = _build_model(Model, rank, args)
-    
+
     return model, train_dataloader, val_dataloader, class_dist, args
 
 
@@ -432,7 +432,7 @@ class Processor:
                 # forward pass the minibatch through the model for the corresponding subject
                 # the input tensor has shape (N, C, L, V): N-batch, V-nodes, C-channels, L-length
                 # the output tensor has shape (N, C', L)
-                predictions = self.model(data)
+                predictions = self.model(data) if not (not self.model.training and torch.cuda.is_available()) else self.model.module(data)
 
                 if kwargs['model'] == 'original':
                     # arrange tensor back into a time series
@@ -464,7 +464,7 @@ class Processor:
                 mse = 0.15 * torch.mean(
                     torch.clamp(
                         self.mse(
-                            F.log_softmax(predictions[:,:,1:], dim=1), 
+                            F.log_softmax(predictions[:,:,1:], dim=1),
                             F.log_softmax(predictions.detach()[:,:,:-1], dim=1)),
                         min=0,
                         max=16))
@@ -505,7 +505,7 @@ class Processor:
         predictions = torch.zeros(N, self.num_classes, L, dtype=captures.dtype, device=self.rank)
 
         # Splits trial into overlapping subsequences of samples
-        if kwargs['dataset_type'] == 'dir': 
+        if kwargs['dataset_type'] == 'dir':
             # Splits trial for `original` model into overlapping subsequences of samples to separately feed into the model
             if kwargs['model'] == 'original':
                 # zero pad the input across time from start by the receptive field size
@@ -532,7 +532,7 @@ class Processor:
             mse = 0.15 * torch.mean(
                 torch.clamp(
                     self.mse(
-                        F.log_softmax(predictions[:,:,1:], dim=1), 
+                        F.log_softmax(predictions[:,:,1:], dim=1),
                         F.log_softmax(predictions.detach()[:,:,:-1], dim=1)),
                     min=0,
                     max=16))
@@ -557,14 +557,14 @@ class Processor:
         foo,
         num_samples=None,
         **kwargs):
-        """Does a forward pass without recording gradients. 
+        """Does a forward pass without recording gradients.
 
         Shared between train and test scripts: train invokes it after each epoch trained,
         test invokes it once for inference only.
         """
 
         # do not record gradients
-        with torch.no_grad():    
+        with torch.no_grad():
             top1_correct = 0
             top5_correct = 0
             total = 0
@@ -576,10 +576,11 @@ class Processor:
 
             latency = 0
 
+            # clear and initialize user-defined metrics for the epoch
+            self._init_metrics(len(dataloader))
+
             # forces early finished GPUs to wait for laggards to prevent hanging during load imbalance
             with self.model.join() if torch.cuda.is_available() else nullcontext():
-                # clear and initialize user-defined metrics for the epoch
-                self._init_metrics(len(dataloader))
 
                 # sweep through the validation dataset in minibatches
                 for k, (captures, labels) in enumerate(dataloader):
@@ -601,6 +602,12 @@ class Processor:
                         total += tot
                         top1_predicted.append(segment_top1_predicted)
 
+                        print(
+                            "[rank {0}, trial {1}]: loss = {2}"
+                            .format(self.rank, k, ce+mse),
+                            flush=True,
+                            file=kwargs['log'][0])
+
                     latency += lat if lat else 0
 
                     top1 = torch.concat(top1_predicted, dim=1)
@@ -609,11 +616,11 @@ class Processor:
                     # collect user-defined evaluation metrics
                     self._collect_metrics(labels, top1)
 
-            test_end_time = time.time()
-            duration = test_end_time - test_start_time
+                test_end_time = time.time()
+                duration = test_end_time - test_start_time
 
-            top1_acc = top1_correct / total
-            top5_acc = top5_correct / total
+                top1_acc = top1_correct / total
+                top5_acc = top5_correct / total
 
         return top1_acc, top5_acc, ce_epoch_loss_val, mse_epoch_loss_val, latency/k if latency else duration
 
@@ -644,7 +651,7 @@ class Processor:
                     top5_correct += top5_cor
                     total += tot
 
-                    # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
+                    # epoch loss has to multiply by minibatch size to get total non-averaged loss,
                     # which will then be averaged across the entire dataset size, since
                     # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
                     # (used for statistics)
@@ -660,7 +667,7 @@ class Processor:
                         # if the minibatch is the same size as requested (first till one before last minibatch)
                         # (because dataset is a multiple of batch size or if current minibatch is of requested size)
                         loss /= kwargs['batch_size']
-                    elif (kwargs['dataset_type'] == 'dir'and 
+                    elif (kwargs['dataset_type'] == 'dir'and
                         (len(dataloader) % kwargs['batch_size'] != 0 and
                         i >= len(dataloader) - (len(dataloader) % kwargs['batch_size']))):
 
@@ -682,7 +689,7 @@ class Processor:
                 # if dataset is a tensor with equal length trials, always enters
                 # if dataset is a set of different length trials, enters every `batch_size` iteration or during last incomplete batch
                 if ((kwargs['dataset_type'] == 'dir' and
-                        ((i + 1) % kwargs['batch_size'] == 0 or 
+                        ((i + 1) % kwargs['batch_size'] == 0 or
                         (i + 1) == len(dataloader))) or
                     (kwargs['dataset_type'] == 'file')):
 
@@ -697,7 +704,7 @@ class Processor:
 
     def train(
         self,
-        save_dir, 
+        save_dir,
         train_dataloader,
         val_dataloader,
         epochs,
@@ -782,7 +789,7 @@ class Processor:
             if self.rank == 0:
                 epoch_end_time = time.time()
                 duration_train = epoch_end_time - epoch_start_time
-            
+
             # gather train stats to the master node
             if torch.cuda.is_available():
                 reduce(loss_train, dst=0, op=torch.distributed.ReduceOp.SUM)
@@ -854,7 +861,7 @@ class Processor:
                 top5_acc_val_list.insert(0, (top5_acc_val).cpu().item())
                 duration_train_list.insert(0, duration_train)
                 duration_val_list.insert(0, duration_val)
- 
+
                 # save all metrics
                 pd.DataFrame(data={"top1": top1_acc_val.cpu().numpy(), "top5": top5_acc_val.cpu().numpy()}, index=[0,1]).to_csv('{0}/accuracy.csv'.format(save_dir))
 
@@ -866,7 +873,7 @@ class Processor:
                 print(
                     "[epoch {0}]: epoch_train_loss = {1}, epoch_val_loss = {2}, top1_acc_train = {3}, top5_acc_train = {4}, top1_acc_val = {5}, top5_acc_val = {6}{7}"
                     .format(
-                        epoch, 
+                        epoch,
                         (loss_train.sum() / (len(train_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().numpy(),
                         (loss_val.sum() / (len(val_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().numpy(),
                         top1_acc_train.cpu().numpy(),
@@ -897,7 +904,7 @@ class Processor:
                         'cat $SLURM_SUBMIT_DIR/mail_draft_{1}.txt | mail -s "[{1}]: status update" {2}'
                         .format(
                             ' '.join([
-                                ' '.join([str(e) for e in t]) for t 
+                                ' '.join([str(e) for e in t]) for t
                                 in zip(
                                     epoch_list,
                                     epoch_loss_train_list,
@@ -1022,7 +1029,7 @@ class Processor:
                     'cat $SLURM_SUBMIT_DIR/mail_draft_{1}.txt | mail -s "[{1}]: status update" {2}'
                     .format(
                         ' '.join([
-                            ' '.join([str(e) for e in t]) for t 
+                            ' '.join([str(e) for e in t]) for t
                             in zip(
                                 top1_acc_val,
                                 top5_acc_val,

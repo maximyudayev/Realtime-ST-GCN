@@ -2,12 +2,12 @@
     "model": {
         "model": "original",
         "strategy": "spatial",
-        "data": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1",
+        "data": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1-subset",
         "dataset_type": "dir",
         "out": "/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
         "backup": "/data/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
-        "actions": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1/actions.txt",
-        "graph": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/skeletons/pku-mmd.json",
+        "actions": "/data/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1/actions.txt",
+        "graph": "/data/leuven/341/vsc34153/rt-st-gcn/data/skeletons/pku-mmd.json",
         "in_feat": 3,
         "stages": 1,
         "layers": [9],
@@ -53,6 +53,6 @@
     },
     "job": {
         "email": "maxim.yudayev@kuleuven.be",
-        "demo": [175, 293, 37]
+        "demo": [3, 1, 2]
     }
 }
