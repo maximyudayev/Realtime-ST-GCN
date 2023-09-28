@@ -36,10 +36,10 @@ cd $SLURM_SUBMIT_DIR
 module purge
 
 # Create temporary data directories on the Scratch partition and copy the data over for leave-one-subject-out training protocol
-mkdir -p ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}
-cp -r ${VSC_DATA}/rt-st-gcn/data/imu_fogit_ABCD/* ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}
-mv ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}/train/features/$(printf '%0.3d' ${SLURM_ARRAY_TASK_ID})* ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}/val/features
-mv ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}/train/labels/$(printf '%0.3d' ${SLURM_ARRAY_TASK_ID})* ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}/val/labels
+mkdir -p ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}
+cp -r ${VSC_DATA}/rt-st-gcn/data/imu_fogit_ABCD/* ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}
+mv ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}/train/features/$(printf '%0.3d' ${SLURM_ARRAY_TASK_ID})* ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}/val/features
+mv ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}/train/labels/$(printf '%0.3d' ${SLURM_ARRAY_TASK_ID})* ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}/val/labels
 
 source activate rt-st-gcn
 
@@ -47,10 +47,10 @@ source activate rt-st-gcn
 (>&1 echo 'starting computation')
 # Execute and time the script
 time python ../main.py train \
-    --batch_size "$(ls ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}/train/labels | wc -l)" \
-    --demo $(shuf -i 0-$(($(ls ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}/val/labels | wc -l)-1)) -n 3) \
-    --data "${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}" \
+    --batch_size "$(ls ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}/train/labels | wc -l)" \
+    --demo $(shuf -i 0-$(($(ls ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}/val/labels | wc -l)-1)) -n 3) \
+    --data "${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}" \
     "$@"
 #    --checkpoint "${VSC_SCRATCH}/rt-st-gcn/pretrained_models/imu_fogit_ABCD/train_27-09-23-04:44:30_fogit_stgcn_9_300_10_${SLURM_ARRAY_TASK_ID}/final.pt" \
 
-rm -r ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}
+rm -r ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}

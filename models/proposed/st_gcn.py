@@ -14,7 +14,7 @@ class Model(nn.Module):
     At runtime, the model looks at the L-dimension of the tensor to make the predictions.
     This enforces computations are numerically correct if the frame buffer is not completely full
     (e.g. the last minibatch of frames from a recording if ``capture_length % buffer != 0``).
-    
+
     All arguments are positional to enforce separation of concern and pass the responsibility for
     model configuration up in the chain to the envoking program (config file).
 
@@ -25,8 +25,8 @@ class Model(nn.Module):
 
     Shape:
         - Input[0]:    :math:`(N, C_{in}, L, V)`.
-        - Output[0]:   :math:`(N, C_{out}, L)`. 
-        
+        - Output[0]:   :math:`(N, C_{out}, L)`.
+
         where
             :math:`N` is a batch size.
 
@@ -45,23 +45,23 @@ class Model(nn.Module):
         **kwargs) -> None:
         """
         Kwargs:
-            in_feat : ``int`` 
+            in_feat : ``int``
                 Number of input sample channels/features.
-            
+
             num_classes : ``int``
                 Number of output classification classes.
-            
+
             kernel : ``list[int]``
                 Temporal kernel size Gamma.
-            
+
             importance : ``bool``
                 If ``True``, adds a learnable importance weighting to the edges of the graph.
-            
+
             latency : ``bool``
-                If ``True``, residual connection adds 
+                If ``True``, residual connection adds
                 ``x_{t}`` frame to ``y_{t}`` (which adds ``ceil(kernel_size/2)`` latency), 
                 adds ``x_{t}`` frame to ``y_{t-ceil(kernel_size/2)}`` otherwise.
-            
+
             layers : ``list[int]``
                 Array of number of ST-GCN layers, oner per stage.
 
@@ -80,7 +80,7 @@ class Model(nn.Module):
             dropout : ``list[list[float]]``
                 2D array of dropout parameters, one per stage per ST-GCN layer.
 
-            graph : ``dict`` 
+            graph : ``dict``
                 Dictionary with parameters for skeleton Graph.
 
             strategy : ``str``
@@ -88,7 +88,7 @@ class Model(nn.Module):
         """
 
         super().__init__()
-        
+
         # save the config arguments for model conversions
         self.conf = kwargs
 
@@ -101,17 +101,17 @@ class Model(nn.Module):
                 ("Incorrect number of constructor parameters in the ST-GCN stage ModuleList.\n"
                 "Expected for stage {0}: {1}, got: ({2}, {3}, {4}, {5})")
                 .format(
-                    i, 
-                    kwargs['layers'][i], 
-                    len(kwargs['in_ch'][i]), 
-                    len(kwargs['out_ch'][i]), 
-                    len(kwargs['stride'][i]), 
+                    i,
+                    kwargs['layers'][i],
+                    len(kwargs['in_ch'][i]),
+                    len(kwargs['out_ch'][i]),
+                    len(kwargs['stride'][i]),
                     len(kwargs['residual'][i])))
 
         # register the normalized adjacency matrix as a non-learnable saveable parameter in the top-level container
         # TODO: check if the buffer gets automatically quantized (relevant only for the size estimate)
         self.graph = Graph(strategy=kwargs['strategy'], **kwargs['graph'])
-        A = torch.tensor(self.graph.A, dtype=torch.float32, requires_grad=False)
+        A = torch.tensor(self.graph.A, dtype=torch.float32, device=rank, requires_grad=False)
         self.register_buffer('A', A)
 
         # input capture normalization
@@ -136,7 +136,7 @@ class Model(nn.Module):
                     graph=self.A,
                     segment=kwargs["segment"],
                     rank=rank)
-                for j in range(layers_in_stage)] 
+                for j in range(layers_in_stage)]
                 for i, layers_in_stage in enumerate(kwargs['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
@@ -147,7 +147,7 @@ class Model(nn.Module):
         self.avg_pool = nn.AvgPool2d(kernel_size=(1, kwargs['graph']['num_node']))
 
         # fcn for prediction
-        # maps C to num_classes channels: (N,C,L,1) -> (N,F,L,1) 
+        # maps C to num_classes channels: (N,C,L,1) -> (N,F,L,1)
         self.fcn_out = nn.Conv2d(
             in_channels=kwargs['out_ch'][-1][-1],
             out_channels=kwargs['num_classes'],
@@ -182,13 +182,13 @@ class Model(nn.Module):
 
         # remap the feature vector to class predictions
         x = self.fcn_out(x)
-        
-        # removes the last dimension (node dimension) of size 1: (N,C,L,1) -> (N,C,L)
+
+       # removes the last dimension (node dimension) of size 1: (N,C,L,1) -> (N,C,L)
         x = x.squeeze(-1)
-        
+
         return x
 
-    
+
     def _swap_layers_for_inference(self):
         # stack of ST-GCN layers
         stack = [[RtStgcnLayer(
@@ -226,7 +226,7 @@ class Model(nn.Module):
 
 class StgcnLayer(nn.Module):
     """[Training] Applies a spatial temporal graph convolution over an input graph sequence.
-    
+
     Processes the entire video capture during training; it is mandatory to retain intermediate values
     for backpropagation (hence no FIFOs allowed in training). Results of training with either layer
     are identical, it is simply a nuissance of autodiff frameworks.
@@ -273,30 +273,30 @@ class StgcnLayer(nn.Module):
         Args:
             in_channels : ``int``
                 Number of input sample channels/features.
-            
+
             out_channels : ``int``
                 Number of channels produced by the convolution.
-            
+
             kernel_size : ``int``
                 Size of the temporal window Gamma.
-            
+
             num_joints : ``int``
                 Number of joint nodes in the graph.
-            
+
             stride : ``int``
                 Stride of the temporal reduction.
-            
+
             num_partitions : ``int``
                 Number of partitions in selected strategy.
                 Must correspond to the first dimension of the adjacency tensor.
-            
+
             dropout : ``float``
                 Dropout rate of the final output.
-            
+
             residual : ``bool``
                 If ``True``, applies a residual connection.
         """
-        
+
         super().__init__()
 
         # temporal kernel Gamma is symmetric (odd number)
@@ -311,28 +311,28 @@ class StgcnLayer(nn.Module):
         self.out_channels = out_channels
 
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
-        self.A = torch.tensor(graph, dtype=torch.float32, requires_grad=False)
+        self.A = graph.clone().detach(dtype=torch.float32, device=rank, requires_grad=False)
 
         # learnable edge importance weighting matrices (each layer, separate weighting)
-        self.edge_importance = nn.Parameter(torch.ones(num_joints,num_joints), requires_grad=True) if importance else 1
+        self.edge_importance = nn.Parameter(torch.ones(num_joints,num_joints,device=rank), requires_grad=True) if importance else 1
 
         # TODO: replace with unfold -> fold calls
         # Toeplitz matrix for temporal accumulation that mimics FIFO behavior, but in batch on full sequence
         self.toeplitz = torch.zeros(segment, segment, device=rank)
         for i in range(self.kernel_size//self.stride):
-            toeplitz += F.pad(
+            self.toeplitz += F.pad(
                 torch.eye(
                     segment - self.stride * i,
                     device=rank),
                 (i*self.stride,0,0,i*self.stride))
 
-        # convolution of incoming frame 
+        # convolution of incoming frame
         # (out_channels is a multiple of the partition number
         # to avoid for-looping over several partitions)
         # partition-wise convolution results are basically stacked across channel-dimension
         self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1, bias=False)
         nn.init.kaiming_uniform_(self.conv.weight, mode='fan_in', nonlinearity='relu')
-        
+
         # normalization and dropout on main branch
         self.bn_relu = nn.Sequential(
             nn.BatchNorm2d(out_channels, track_running_stats=False),
@@ -360,32 +360,32 @@ class StgcnLayer(nn.Module):
 
 
     def forward(self, x):
-        # residual branch 
+        # residual branch
         res = self.residual(x)
 
-        # spatial convolution of incoming frame (node-wise) 
-        x = self.conv(x) 
+        # spatial convolution of incoming frame (node-wise)
+        x = self.conv(x)
 
         # convert to the expected dimension order and add the partition dimension 
-        # reshape the tensor for multiplication with the adjacency matrix 
+        # reshape the tensor for multiplication with the adjacency matrix
         # (convolution output contains all partitions, stacked across the channel dimension) 
         # split into separate 4D tensors, each corresponding to a separate partition 
-        x = torch.split(x, self.out_channels, dim=1) 
-        # concatenate these 4D tensors across the partition dimension 
-        x = torch.stack(x, -1) 
+        x = torch.split(x, self.out_channels, dim=1)
+        # concatenate these 4D tensors across the partition dimension
+        x = torch.stack(x, -1)
         # change the dimension order for the correct broadcating of the adjacency matrix 
-        # (N,C,L,V,P) -> (N,L,P,C,V) 
-        x = x.permute(0,2,4,1,3) 
+        # (N,C,L,V,P) -> (N,L,P,C,V)
+        x = x.permute(0,2,4,1,3)
         # single multiplication with the adjacency matrices (spatial selective addition, across partitions) 
-        x = torch.matmul(x, self.A*self.edge_importance) 
+        x = torch.matmul(x, self.A*self.edge_importance)
 
-        # sum temporally by multiplying features with the Toeplitz matrix 
+        # sum temporally by multiplying features with the Toeplitz matrix
         # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L) 
         x = x.permute(0,2,3,4,1)
         x = torch.matmul(x, self.toeplitz)
         # sum across partitions (N,C,V,L)
         x = torch.sum(x, dim=(1))
-        # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V) 
+        # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V)
         x = x.permute(0,1,3,2)
 
         # normalize the output of the st-gcn operation and activate
@@ -397,7 +397,7 @@ class StgcnLayer(nn.Module):
 
 class RtStgcnLayer(nn.Module):
     """[!Inference only!] Applies a spatial temporal graph convolution over an input graph sequence.
-    
+
     Each layer has a FIFO to store the corresponding Gamma-sized window of graph frames.
     All arguments are positional to enforce separation of concern and pass the responsibility for
     model configuration up in the chain to the envoking program (config file).
@@ -414,7 +414,7 @@ class RtStgcnLayer(nn.Module):
 
         where
             :math:`N` is the batch size.
-            
+
             :math:`L` is the buffer size (buffered frames number).
 
             :math:`C_{in}` is the number of input channels (features).
@@ -443,34 +443,34 @@ class RtStgcnLayer(nn.Module):
         Args:
             in_channels : ``int``
                 Number of input sample channels/features.
-            
+
             out_channels : ``int``
                 Number of channels produced by the convolution.
-            
+
             kernel_size : ``int``
                 Size of the temporal window Gamma.
-            
+
             num_joints : ``int``
                 Number of joint nodes in the graph.
-            
+
             stride : ``int``
                 Stride of the temporal reduction.
-            
+
             num_partitions : ``int``
                 Number of partitions in selected strategy.
                 Must correspond to the first dimension of the adjacency tensor.
-            
+
             dropout : ``float``
                 Dropout rate of the final output.
-            
+
             residual : ``bool``
                 If ``True``, applies a residual connection.
-            
+
             fifo_latency : ``bool``
                 If ``True``, residual connection adds ``x_{t}`` frame to ``y_{t}`` (which adds ``ceil(kernel_size/2)`` latency), 
                 otherwise adds ``x_{t}`` frame to ``y_{t-ceil(kernel_size/2)}``.
         """
-        
+
         super().__init__()
 
         # temporal kernel Gamma is symmetric (odd number)
@@ -483,12 +483,12 @@ class RtStgcnLayer(nn.Module):
         fifo_size = stride*(kernel_size-1)+1
         self.is_residual = residual
         self.is_residual_noconv = residual and (in_channels == out_channels) and (stride == 1)
-        
+
         # learnable edge importance weighting matrices (each layer, separate weighting)
         # just a placeholder for successful load_state_dict() from <StgcnLayer>._swap_layers_for_inference()
         self.edge_importance = nn.Parameter(torch.ones(num_joints,num_joints), requires_grad=False) if importance else 1
 
-        # convolution of incoming frame 
+        # convolution of incoming frame
         # (out_channels is a multiple of the partition number
         # to avoid for-looping over several partitions)
         # partition-wise convolution results are basically stacked across channel-dimension
@@ -542,7 +542,7 @@ class RtStgcnLayer(nn.Module):
             res = self.functional_mul_zero.mul_scalar(x, 0.0)
         else:
             res = self.residual(x)
-        
+
         # spatial convolution of incoming frame (node-wise)
         x = self.conv(x)
 
@@ -570,9 +570,9 @@ class AggregateStgcn(nn.Module):
         kernel_size,
         out_channels,
         stride):
-        
+
         super().__init__()
-        
+
         self.out_channels = out_channels
         self.stride = stride
         self.fifo_size = fifo_size
@@ -640,12 +640,12 @@ class ObservedAggregateStgcn(nn.Module):
         self.conv3d_matmul = nn.Conv3d(in_channels=num_partitions, out_channels=num_joints, kernel_size=(1,num_joints,1), bias=False)
         self.conv3d_sum = nn.Conv3d(in_channels=1, out_channels=1, kernel_size=(1,kernel_size,1), dilation=(1,stride,1), bias=False)
         self.functional_cat = nnq.FloatFunctional()
-        
+
         self.conv3d_matmul.weight = nn.Parameter(graph.permute(2,0,1)[:,:,None,:,None], requires_grad=False)
         self.conv3d_sum.weight = nn.Parameter(torch.ones(1,1,1,kernel_size,1), requires_grad=False)
 
         self.fifo = torch.zeros(1, 1, channels, fifo_size, num_joints, dtype=torch.float32)
-        
+
         self.channels = channels
         self.fifo_size = fifo_size
         self.kernel_size = kernel_size
@@ -658,11 +658,11 @@ class ObservedAggregateStgcn(nn.Module):
     def from_float(cls, float_mod):
         assert hasattr(float_mod, 'qconfig')
         observed_mod = cls(
-            float_mod.out_channels, 
-            float_mod.A.size(0), 
-            float_mod.A.size(1), 
-            float_mod.stride, 
-            float_mod.fifo_size, 
+            float_mod.out_channels,
+            float_mod.A.size(0),
+            float_mod.A.size(1),
+            float_mod.stride,
+            float_mod.fifo_size,
             float_mod.kernel_size,
             float_mod.A)
         observed_mod.qconfig = float_mod.qconfig

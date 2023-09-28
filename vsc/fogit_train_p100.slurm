@@ -48,6 +48,7 @@ time python ../main.py train \
     --batch_size "$(ls ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}/val/labels | wc -l)" \
     --demo $(shuf -i 0-$(($(ls ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}/val/labels | wc -l)-1)) -n 3) \
     --data "${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}" \
+    --checkpoint "${VSC_SCRATCH}/rt-st-gcn/pretrained_models/imu_fogit_ABCD/train_27-09-23-04:44:30_fogit_stgcn_9_300_10_${SLURM_ARRAY_TASK_ID}/final.pt" \
     "$@"
 
 rm -r ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}

@@ -39,7 +39,8 @@ def _build_model(Model, rank: int, args):
     # load the checkpoint if not trained from scratch
     if args.checkpoint:
         map_location = {'cuda:%d' % 0: 'cuda:%d' % rank} if not (rank is None) else None
-        model.load_state_dict(torch.load(args.checkpoint, map_location=map_location)['model_state_dict'])
+        state = torch.load(args.checkpoint, map_location=map_location)
+        model.module.load_state_dict(state['model_state_dict'])
     if torch.cuda.is_available(): barrier()
 
     return model
@@ -265,6 +266,7 @@ class Processor:
         self.metrics = metrics
         # CE guides model toward absolute correctness on single frame predictions
         self.ce = nn.CrossEntropyLoss(weight=(1-class_dist/torch.sum(class_dist)).to(rank), reduction='mean')
+        # self.ce = nn.CrossEntropyLoss(reduction='mean')
         # MSE component punishes large variations in class probabilities between consecutive samples
         self.mse = nn.MSELoss(reduction='none')
         self.num_classes = num_classes
