@@ -311,7 +311,7 @@ class StgcnLayer(nn.Module):
         self.out_channels = out_channels
 
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
-        self.A = graph.clone().detach(dtype=torch.float32, device=rank, requires_grad=False)
+        self.A = graph.clone().detach()
 
         # learnable edge importance weighting matrices (each layer, separate weighting)
         self.edge_importance = nn.Parameter(torch.ones(num_joints,num_joints,device=rank), requires_grad=True) if importance else 1

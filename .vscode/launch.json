@@ -126,13 +126,13 @@
             "args": [
                 "train",
                 "--batch_size",
-                "346",
+                "${input:batch_size}",
                 "--kernel",
-                "9",
+                "${input:kernel}",
                 "--segment",
-                "100",
+                "300",
                 "--epochs",
-                "1",
+                "${input:epochs}",
                 "--config",
                 "config/imu_fogit_ABCD/realtime_local.json"
             ]

@@ -400,9 +400,9 @@ class Processor:
                 P_start = 0
                 # pad the end to chunk trial into equal size overlapping subsegments to prevent reallocating GPU memory (masks actual outputs later)
                 # NOTE: subsegments must overlap by G-1 to continue from the same internal state (first G-1 predictions in subsegments other than first will be discarded)
-                temp = (L-(S-1))%(S-G)
+                temp = (L-S)%(S-G)
                 # (temp = 0 - trial splits perfectly, temp < 0 - trial shorter than S, temp > 0 - padding needed to perfectly split)
-                P_end = 0 if temp == 0 else (S-G+1-temp if temp > 0 else S-L)
+                P_end = 0 if temp == 0 else (S-G-temp if temp > 0 else S-L)
             else:
                 raise NotImplementedError('Not supported model type in `forward_` implementation for directory-based dataset')
 
@@ -448,7 +448,7 @@ class Processor:
                     ground_truth = labels[:,(S-1)*i+(0 if i == 0 else 1):(S-1)*(i+1)+1 if end <= (L+P_start) else L]
                 elif kwargs['model'] == 'realtime':
                     # clear the overlapping G-1 predictions at the start of each segment (except the very first segment)
-                    predictions = predictions if i == 0 else predictions[:,:,G:]
+                    predictions = predictions if i == 0 else predictions[:,:,G-1:]
                     # drop the outputs corresponding to end-padding (last subsegment)
                     predictions = predictions if end <= L else predictions[:,:,:-P_end]
                     # select correponding labels to compare against
@@ -805,7 +805,7 @@ class Processor:
                     "epoch": epoch,
                     "model_state_dict": self.model.module.state_dict(),
                     "optimizer_state_dict": self.optimizer.state_dict(),
-                    "loss": loss_train.sum() / (len(train_dataloader) * 1 if self.world_size is None else self.world_size),
+                    "loss": loss_train.sum() / (len(train_dataloader) * (1 if self.world_size is None else self.world_size)),
                     }, "{0}/epoch-{1}.pt".format(save_dir, epoch))
 
             # set layers to inference mode if behavior differs between train and prediction
@@ -849,13 +849,13 @@ class Processor:
 
                 epoch_list.insert(0, epoch)
 
-                ce_loss_train_list.insert(0, (loss_train[0] / (len(train_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().item())
-                mse_loss_train_list.insert(0, (loss_train[1] / (len(train_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().item())
-                epoch_loss_train_list.insert(0, (loss_train.sum() / (len(train_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().item())
+                ce_loss_train_list.insert(0, (loss_train[0] / (len(train_dataloader) * (1 if self.world_size is None else self.world_size))).cpu().item())
+                mse_loss_train_list.insert(0, (loss_train[1] / (len(train_dataloader) * (1 if self.world_size is None else self.world_size))).cpu().item())
+                epoch_loss_train_list.insert(0, (loss_train.sum() / (len(train_dataloader) * (1 if self.world_size is None else self.world_size))).cpu().item())
 
-                ce_loss_val_list.insert(0, (loss_val[0] / (len(val_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().item())
-                mse_loss_val_list.insert(0, (loss_val[1] / (len(val_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().item())
-                epoch_loss_val_list.insert(0, (loss_val.sum() / (len(val_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().item())
+                ce_loss_val_list.insert(0, (loss_val[0] / (len(val_dataloader) * (1 if self.world_size is None else self.world_size))).cpu().item())
+                mse_loss_val_list.insert(0, (loss_val[1] / (len(val_dataloader) * (1 if self.world_size is None else self.world_size))).cpu().item())
+                epoch_loss_val_list.insert(0, (loss_val.sum() / (len(val_dataloader) * (1 if self.world_size is None else self.world_size))).cpu().item())
 
                 top1_acc_train_list.insert(0, (top1_acc_train).cpu().item())
                 top1_acc_val_list.insert(0, (top1_acc_val).cpu().item())
@@ -876,8 +876,8 @@ class Processor:
                     "[epoch {0}]: epoch_train_loss = {1}, epoch_val_loss = {2}, top1_acc_train = {3}, top5_acc_train = {4}, top1_acc_val = {5}, top5_acc_val = {6}{7}"
                     .format(
                         epoch,
-                        (loss_train.sum() / (len(train_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().numpy(),
-                        (loss_val.sum() / (len(val_dataloader) * 1 if self.world_size is None else self.world_size)).cpu().numpy(),
+                        (loss_train.sum() / (len(train_dataloader) * (1 if self.world_size is None else self.world_size))).cpu().numpy(),
+                        (loss_val.sum() / (len(val_dataloader) * (1 if self.world_size is None else self.world_size))).cpu().numpy(),
                         top1_acc_train.cpu().numpy(),
                         top5_acc_train.cpu().numpy(),
                         top1_acc_val.cpu().numpy(),
@@ -938,12 +938,12 @@ class Processor:
                     }).to_csv('{0}/train-validation-curve.csv'.format(save_dir))
 
         # save the final model
-        if (epoch in checkpoints) and ((self.rank == 0 and torch.cuda.is_available()) or not torch.cuda.is_available()):
+        if ((self.rank == 0 and torch.cuda.is_available()) or not torch.cuda.is_available()):
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": self.model.module.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
-                "loss": loss_train.sum() / (len(train_dataloader) * 1 if self.world_size is None else self.world_size),
+                "loss": loss_train.sum() / (len(train_dataloader) * (1 if self.world_size is None else self.world_size)),
                 }, "{0}/final.pt".format(save_dir))
 
         if self.rank == 0 or not torch.cuda.is_available():
@@ -1007,7 +1007,7 @@ class Processor:
             print(
                 "[test]: epoch_loss = {0}, top1_acc = {1}, top5_acc = {2}{3}"
                 .format(
-                    (loss_val.sum() / (len(dataloader) * 1 if self.world_size is None else self.world_size)).cpu().numpy(),
+                    (loss_val.sum() / (len(dataloader) * (1 if self.world_size is None else self.world_size))).cpu().numpy(),
                     top1_acc_val.cpu().numpy(),
                     top5_acc_val.cpu().numpy(),
                     self._log_metrics()),
