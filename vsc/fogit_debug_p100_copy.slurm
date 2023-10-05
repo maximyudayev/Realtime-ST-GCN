@@ -2,8 +2,8 @@
 #SBATCH -A lp_stadius_fpga_ai
 #SBATCH --cluster=genius
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=36
-#SBATCH --gpus-per-node=4
+#SBATCH --ntasks-per-node=9
+#SBATCH --gpus-per-node=1
 #SBATCH --partition=gpu_p100_debug
 #SBATCH --mem-per-cpu=5000
 #SBATCH --output=debug/%x_%a.out
@@ -19,7 +19,14 @@
 # Debug jobs limited to 30 min (max 1 debug job in the queue)
 
 export MASTER_ADDR=$(scontrol show hostname ${SLURM_NODELIST} | head -n 1)
-export MASTER_PORT=42069
+while
+  port=$(shuf -n 1 -i 49152-65535)
+  netstat -atun | grep -q "$port"
+do
+  continue
+done
+
+export MASTER_PORT="$port"
 
 if ["$SLURM_ARRAY_TASK_ID" == ""]
 then

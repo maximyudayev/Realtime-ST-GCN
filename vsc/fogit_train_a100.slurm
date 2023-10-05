@@ -17,7 +17,15 @@
 # Icelake GPU nodes have 512GB
 
 export MASTER_ADDR=$(scontrol show hostname ${SLURM_NODELIST} | head -n 1)
-export MASTER_PORT=42069
+
+while
+  port=$(shuf -n 1 -i 49152-65535)
+  netstat -atun | grep -q "$port"
+do
+  continue
+done
+
+export MASTER_PORT="$port"
 
 if ["$SLURM_ARRAY_TASK_ID" == ""]
 then
