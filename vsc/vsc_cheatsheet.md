@@ -71,3 +71,13 @@ gquote example.pbs
 `sam-list-usagerecords -A <project> -s <YYYY-MM-DD> -e <YYYY-MM-DD>` -> summarize transactions in a project
 
 `watch nvidia-smi` -> monitor GPUs
+
+```shell
+for d in */;
+do
+  cd ${d};
+  find . -type f -not -name 'final.pt' -and -not -name '*.csv' -and -not -name "$(ls -v epoch* 2>/dev/null | tail -1)" -delete;
+  cd ..;
+done
+```
+-> delete all intermediate model checkpoints from all subdirectories except the last saved epoch, the final model, and all the reported CSV files, of each respective subdirectory

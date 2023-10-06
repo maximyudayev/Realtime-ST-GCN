@@ -434,6 +434,8 @@ class Processor:
                 # forward pass the minibatch through the model for the corresponding subject
                 # the input tensor has shape (N, C, L, V): N-batch, V-nodes, C-channels, L-length
                 # the output tensor has shape (N, C', L)
+                # NOTE: for distributed evaluation with DDP, must forward-pass the model using the local model by calling .module() 
+                # to avoid processes hanging in anticipation of synchronization (https://github.com/pytorch/pytorch/issues/54059#issuecomment-801197198)
                 predictions = self.model(data) if not (not self.model.training and torch.cuda.is_available()) else self.model.module(data)
 
                 if kwargs['model'] == 'original':
@@ -581,7 +583,7 @@ class Processor:
             # clear and initialize user-defined metrics for the epoch
             self._init_metrics(len(dataloader))
 
-            # forces early finished GPUs to wait for laggards to prevent hanging during load imbalance
+            # NOTE: forces early finished GPUs to wait for laggards to prevent hanging during load imbalance
             with self.model.join() if torch.cuda.is_available() else nullcontext():
 
                 # sweep through the validation dataset in minibatches
@@ -644,9 +646,10 @@ class Processor:
         total = 0
 
         # sweep through the training dataset in minibatches
-        # TODO: make changes for file dataset type
+        # NOTE: forces early finished GPUs to wait for laggards to prevent hanging during load imbalance
         with self.model.join() if torch.cuda.is_available() else nullcontext():
             for i, (captures, labels) in enumerate(dataloader):
+                # TODO: add model.no_sync() context manager to prevent gradient synchronization until the optimization step
                 # generator that returns lazy iterator over segments of the trial to process long sequence in manageable overlapping chunks to fit in memory
                 for _, _, _, top1_cor, top5_cor, tot, ce, mse, _ in self._forward(captures, labels, **kwargs):
                     top1_correct += top1_cor

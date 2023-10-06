@@ -1,9 +1,20 @@
 # Realtime ST-GCN
-Implementation of ST-GCN to continual realtime processing and introduction of a lightweight RT-ST-GCN for realtime embedded devices, on continual multi-action sequences of skeleton data.
+Implementation of [ST-GCN](https://arxiv.org/abs/1801.07455) to continual realtime processing and introduction of a lightweight RT-ST-GCN for realtime embedded devices, on continual multi-action sequences of skeleton data.
 
 Classes are decoupled for modularity and readability, with separation of concern dictated by the user's JSON configuration files or CLI arguments.
 
+Leverages [PyTorch's Distributed Data Parallel](https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html#torch.nn.parallel.DistributedDataParallel) and our novel training trick for long different-length sequences datasets. Collectively enabling:
+* accelerated distributed training and testing across multiple GPUs, without GIL (**Distributed Data Parallel**);
+* consuming datasets processing data entries of which otherwise exceeds available device memory (**our trick**);
+* emulate learning with large batch sizes, where other methods were previously limited to equal-length data entries and were memory-bound for batch size (**our trick**);
+
 <!-- > **Realtime ST-GCN: Adapting for Inference at the Edge**, Maxim Yudayev, Benjamin Filtjens and Josep Balasch, TNNLS 2023. [[Arxiv Preprint]](https://arxiv.org/abs/...) -->
+
+## Contributions
+1. Formalizes application of ST-GCN and its SotA derivatives to [continuous recognition](#continuous-recognition).
+2. Establishes [benchmarks](#results) on key, relevant datasets for the original unaltered ST-GCN model to compare against, and for reliable reproduction of results.
+3. Proposes a distributed [training method](#training-technique) for otherwise memory-exceeding long-sequence datasets of unequal trial durations, and enables use of any, previously impossible, desired effective batch size.
+4. Proposes a [lightweight model](#rt-st-gcn) optimization targeted at constrained embedded devices.
 
 ## TODO
 - [x] Implement ST-GCN correctly to the paper's spec (but in RT variant), using basic differentiable tensor operators and cutting out messy Modules combination (stacked GCN + TCN).
@@ -11,23 +22,31 @@ Classes are decoupled for modularity and readability, with separation of concern
 - [x] Write data preparation and loading backend for out-of-core big data files.
 - [x] Write a script to leverage [KU Leuven HPC](https://www.vscentrum.be/) infrastructure for the PyTorch workflow in a simple automated process that originates on the local machine.
 - [x] Add support for frame buffered realtime processing.
-- [ ] Add support for 2 FIFO latency variants.
+- [ ] Add support for FIFO latency variants.
 - [ ] Add support for file type datasets (equal duration trials).
 - [x] Quantize the model with the 8-bit dynamic fixed-point technique.
 - [x] Compare quantized and floating-point models.
 - [x] Adapt training for [Distributed Data Parallel](https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html#torch.nn.parallel.DistributedDataParallel) for efficient multi-GPU training.
+- [ ] Adapt BN layers to our training trick to emulate learning on larger batches.
 - [ ] Adapt ST-GCN for quantization to enable PTQ and QAT.
+- [ ] Benchmark quantized models.
+- [ ] Add fixed trials to the repo for benchmarking and visualization.
+- [ ] Clear FIFOs of the RT-ST-GCN model after each trial in the [`benchmark`](#benchmarking) routine.
 - [ ] Add ST-GCN eloborate explanatory document to the repository (or link to the preprint article).
 - [ ] Clarify why RT-ST-GCN can be trained as a Batch model and later just copy the learned parameters over.
 - [ ] Explain the training parallelization trick.
 - [ ] Propose a guideline on model type selection.
 - [x] Split the processing infrastructure code from the usecase code as a standalone repository.
+- [ ] Extend the infrastructure to the [Distributed RPC Framework](https://pytorch.org/docs/stable/rpc.html) and [TorchRun](https://pytorch.org/docs/stable/elastic/run.html).
 
 ## Future Directions
+- [ ] Turn processing infrastructure into a microservice endpoint with interface to benchmark external models on proprietary datasets.
 - [ ] Write an article on accuracy improvement after the graph construction fix.
 - [ ] Do design space exploration (NAS + Knowledge Distillation) of the network parameters on the adapted network for software-hardware co-design of a hardware accelerator.
 - [ ] Compare transfer learning vs. from-scratch learning for the freezing-of-gait (FOG) usecase.
-- [ ] Refine RT-ST-GCN predictions with additional SotA mechanisms (transformers, input-dependent attention, different adjacency matrix modelling, squeeze-excite networks, etc.).
+- [ ] RT-ST-GCN predictions refinement with additional SotA mechanisms (transformers, input-dependent attention, different adjacency matrix modelling, squeeze-excite networks, etc.).
+- [ ] Expanded loss function that minimizes logits between different frames of the same class.
+- [ ] Custom loss function closer related to the [segmental F1](https://arxiv.org/abs/1611.05267) evaluation metric to help improve learning process (e.g. incorporates confidence levels, action durations, temporal shifts and overlap with the ground truth, closeness between classes in latent space).
 
 ## Directory Tree
 ```
@@ -108,6 +127,7 @@ root/
 ├── .gitignore
 ├── main.py
 ├── processor.py
+├── metrics.py
 ├── st_gcn_parser.py
 ├── visualize.py
 ├── README.md
@@ -265,9 +285,16 @@ The `main.py` provides multiple functionalities from one entry-point. Elaborate 
 
 CLI arguments must be provided before specifying the configuration file (or omitting to use the default one). CLI arguments, when provided, override the configurations in the (provided) JSON configuration file.
 
+<!-- TODO: add diagram explaining working between different classes -->
+
 ### Training
-<!-- ## Training
-To train a new ST-GCN model, run
+#### PKU-MMD
+#### FOG-IT
+Original ST-GCN takes ~15 min/epoch (4xP100 GPUs).
+
+RT-ST-GCN takes ~1 min/epoch (1xP100 GPU).
+
+<!-- To train a new ST-GCN model, run
 
 ```
 python main.py recognition -c config/st_gcn/<dataset>/train.yaml [--work_dir <work folder>]
