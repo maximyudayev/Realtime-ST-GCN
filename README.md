@@ -18,7 +18,7 @@ Classes are decoupled for modularity and readability, with separation of concern
 - [x] Adapt training for [Distributed Data Parallel](https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html#torch.nn.parallel.DistributedDataParallel) for efficient multi-GPU training.
 - [ ] Adapt ST-GCN for quantization to enable PTQ and QAT.
 - [ ] Add ST-GCN eloborate explanatory document to the repository (or link to the preprint article).
-- [ ] Clarify why RT ST-GCN can be trained as a Batch model and later just copy the learned parameters over.
+- [ ] Clarify why RT-ST-GCN can be trained as a Batch model and later just copy the learned parameters over.
 - [ ] Explain the training parallelization trick.
 - [ ] Propose a guideline on model type selection.
 - [x] Split the processing infrastructure code from the usecase code as a standalone repository.

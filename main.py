@@ -118,13 +118,13 @@ def test(rank: int, world_size: int, args):
     Model = pick_model(args)
 
     # perform common setup around the model's black box
-    model, _, val_dataloader, class_dist, args = setup(Model, rank, world_size, args)
+    model, train_dataloader, val_dataloader, class_dist, args = setup(Model, rank, world_size, args)
 
     # list metrics that Processor should record
     metrics = [
-        F1Score(rank, args.num_classes, args.iou_threshold),
-        EditScore(rank, args.num_classes),
-        ConfusionMatrix(rank, args.num_classes)]
+        F1Score(rank, world_size, args.num_classes, args.iou_threshold),
+        EditScore(rank, world_size, args.num_classes),
+        ConfusionMatrix(rank, world_size, args.num_classes)]
 
     # construct a processing wrapper
     # NOTE: uses class distribution from training set
@@ -194,9 +194,9 @@ def benchmark(rank: int, world_size: int, args):
 
     # list metrics that Processor should record
     metrics = [
-        F1Score(rank, args.num_classes, args.iou_threshold),
-        EditScore(rank, args.num_classes),
-        ConfusionMatrix(rank, args.num_classes)]
+        F1Score(rank, world_size, args.num_classes, args.iou_threshold),
+        EditScore(rank, world_size, args.num_classes),
+        ConfusionMatrix(rank, world_size, args.num_classes)]
 
     # construct a processing wrapper
     processor = Processor(model, metrics, args.num_classes, class_dist, rank, world_size)
@@ -722,6 +722,13 @@ if __name__ == '__main__':
             '(default: data/skeletons/openpose.json)')
     # IO arguments
     parser_test_io.add_argument(
+        '--demo',
+        type=int,
+        nargs='*',
+        metavar='',
+        help='list of trial indices to demo segmentation masks for '
+            '(default: [])')
+    parser_test_io.add_argument(
         '--data',
         metavar='',
         help='path to the dataset directory (default: data/pku-mmd)')
@@ -953,6 +960,13 @@ if __name__ == '__main__':
         metavar='',
         help='quantization backend (default: x86)')
     # IO arguments
+    parser_benchmark_io.add_argument(
+        '--demo',
+        type=int,
+        nargs='*',
+        metavar='',
+        help='list of trial indices to demo segmentation masks for '
+            '(default: [])')
     parser_benchmark_io.add_argument(
         '--data',
         metavar='',

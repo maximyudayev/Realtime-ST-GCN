@@ -53,11 +53,12 @@ source activate rt-st-gcn
 (>&1 echo "$@")
 (>&1 echo 'starting computation')
 # Execute and time the script
-time python ../main.py train \
-    --batch_size "$(ls ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}/train/labels | wc -l)" \
+time python ../main.py test \
     --demo $(shuf -i 0-$(($(ls ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}/val/labels | wc -l)-1)) -n 3) \
     --data "${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}" \
+    --checkpoint "${VSC_SCRATCH}/rt-st-gcn/pretrained_models/imu_fogit_ABCD/train_04-10-23-16:54:14_fogit_rtstgcn_9_30_${SLURM_ARRAY_TASK_ID}/final.pt" \
     "$@"
-#    --checkpoint "${VSC_SCRATCH}/rt-st-gcn/pretrained_models/imu_fogit_ABCD/train_27-09-23-04:44:30_fogit_stgcn_9_300_10_${SLURM_ARRAY_TASK_ID}/final.pt" \
+
+#    --batch_size "$(ls ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}/train/labels | wc -l)" \
 
 rm -r ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD_copy/${SLURM_ARRAY_TASK_ID}

@@ -2,19 +2,19 @@
 #SBATCH -A lp_stadius_fpga_ai
 #SBATCH --cluster=genius
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=32
-#SBATCH --gpus-per-node=8
-#SBATCH --partition=gpu_v100
-#SBATCH --mem-per-cpu=20000
+#SBATCH --ntasks-per-node=9
+#SBATCH --gpus-per-node=1
+#SBATCH --partition=gpu_p100
+#SBATCH --mem-per-cpu=5000
 #SBATCH --output=debug/%x_%a.out
 #SBATCH --error=debug/%x_%a.err
 
 #SBATCH --mail-type=FAIL,BEGIN,END
 #SBATCH --mail-user=maxim.yudayev@kuleuven.be
 
-# (1/2) Full Cascadelake x8 V100 GPU node (requires 4 cores per gpu)
-# GPU partition (gpu_v100 - 3 day max walltime; gpu_v100_long - 7 day max walltime)
-# Cascadelake GPU nodes have 768GB
+# (1/20) Full Skylake x4 P100 GPU node (requires 9 cores per gpu)
+# GPU partition (gpu_p100 - 3 day max walltime; gpu_p100_long - 7 day max walltime)
+# Skylake GPU nodes have 192GB
 
 export MASTER_ADDR=$(scontrol show hostname ${SLURM_NODELIST} | head -n 1)
 
@@ -56,6 +56,13 @@ time python ../main.py train \
     --batch_size "$(ls ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}/val/labels | wc -l)" \
     --demo $(shuf -i 0-$(($(ls ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}/val/labels | wc -l)-1)) -n 3) \
     --data "${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}" \
+    --checkpoint "${VSC_SCRATCH}/rt-st-gcn/pretrained_models/imu_fogit_ABCD/train_27-09-23-04:44:30_fogit_stgcn_9_300_10_${SLURM_ARRAY_TASK_ID}/final.pt" \
     "$@"
+
+#time python ../main.py test \
+#    --demo $(shuf -i 0-$(($(ls ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}/val/labels | wc -l)-1)) -n 3) \
+#    --data "${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}" \
+#    --checkpoint "${VSC_SCRATCH}/rt-st-gcn/pretrained_models/imu_fogit_ABCD/train_05-10-23-07:23:23_fogit_rtstgcn_9_30_${SLURM_ARRAY_TASK_ID}/final.pt" \
+#    "$@"
 
 rm -r ${VSC_SCRATCH}/rt-st-gcn/data/imu_fogit_ABCD/${SLURM_ARRAY_TASK_ID}
