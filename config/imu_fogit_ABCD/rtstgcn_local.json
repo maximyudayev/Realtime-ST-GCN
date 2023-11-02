@@ -1,6 +1,6 @@
 {
     "model": {
-        "model": "realtime",
+        "model": "rt-st-gcn",
         "strategy": "spatial",
         "data": "data/imu_fogit_ABCD",
         "dataset_type": "dir",
@@ -36,7 +36,7 @@
     "optimizer": {
         "seed": 1538574472,
         "epochs": 100,
-        "checkpoints": [9,19,29,39,49,59,69,79,89],
+        "checkpoint_indices": [9,19,29,39,49,59,69,79,89],
         "learning_rate": 0.0005,
         "learning_rate_decay": 1.0,
         "batch_size": 64

@@ -45,11 +45,11 @@ class Parser(argparse.ArgumentParser):
         with open(cli_args.config, 'r') as f:
             data = json.load(f)
         
-        # parse arguments in the file and store them in a blank namespace
-        config_args = dict([items for sub_dict in data.items() for items in sub_dict[1].items()])
+        # # parse arguments in the file and store them in a blank namespace
+        # config_args = dict([items for sub_dict in data.items() for items in sub_dict[1].items()])
 
         # set arguments in the target namespace if they haven’t been set yet
-        for k, v in config_args.items():
+        for k, v in data.items():
             if getattr(cli_args, k, None) is None:
                 setattr(cli_args, k, v)
         

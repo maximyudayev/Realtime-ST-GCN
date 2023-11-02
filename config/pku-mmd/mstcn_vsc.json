@@ -1,0 +1,44 @@
+{
+    "processor": {
+        "model": "ms-tcn",
+        "data": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1",
+        "dataset_type": "dir",
+        "out": "/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
+        "backup": "/data/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
+        "actions": "/data/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1/actions.txt",
+        "graph": "/data/leuven/341/vsc34153/rt-st-gcn/data/skeletons/pku-mmd.json",
+        "demo": [175, 293, 37],
+        "iou_threshold": [0.1,0.25,0.5]
+    },
+    "arch": {
+        "strategy": "spatial",
+        "segment": 1000,
+        "in_feat": 3,
+        "stages": 4,
+        "refine": "probability",
+        "probability": "logsoftmax",
+        "ms-tcn": {
+            "latency": false,
+            "importance": true,
+            "in_feat": 3,
+            "stages": 4,
+            "layers": [10,10,10,10],
+            "kernel": [3,3,3,3],
+            "filters": [64,64,64,64],
+            "dropout": [0,0,0,0]
+        }
+    },
+    "optimizer": {
+        "seed": 1538574472,
+        "epochs": 100,
+        "checkpoint_indices": [9,19,29,39,49,59,69,79,89],
+        "learning_rate": 0.0005,
+        "learning_rate_decay": 1.0,
+        "batch_size": 64
+    },
+    "job": {
+        "email": "maxim.yudayev@kuleuven.be",
+        "log": [null,null],
+        "verbose": 0
+    }
+}

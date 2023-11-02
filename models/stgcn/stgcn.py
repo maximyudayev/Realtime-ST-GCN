@@ -1,8 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.utils.tgcn import ConvTemporalGraphical
-from models.utils.graph import Graph
+from models.utils import ConvTemporalGraphical, Graph
 
 
 class Model(nn.Module):
@@ -29,9 +28,9 @@ class Model(nn.Module):
     """
 
     def __init__(self, rank, **kwargs):
-        super().__init__()
+        super(Model, self).__init__()
 
-        self.conf = kwargs
+        conf = kwargs['st-gcn']
 
         # load graph
         self.graph = Graph(strategy=kwargs['strategy'], **kwargs['graph'])
@@ -40,104 +39,71 @@ class Model(nn.Module):
 
         # build networks
         spatial_kernel_size = kwargs['graph']['num_node']
-        temporal_kernel_size = kwargs['kernel'][0]
+        temporal_kernel_size = conf['kernel'][0]
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
         
-        self.data_bn = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
+        # self.data_bn = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
         # fcn for feature remapping of input to the network size
-        self.fcn_in = nn.Conv2d(in_channels=kwargs['in_feat'], out_channels=kwargs['in_ch'][0][0], kernel_size=1)
+        self.fcn_in = nn.Conv2d(in_channels=conf['in_feat'], out_channels=conf['in_ch'][0][0], kernel_size=1)
 
-        stack = [[st_gcn(
-                    in_channels=kwargs['in_ch'][i][j],
-                    out_channels=kwargs['out_ch'][i][j],
+        stack = [[StgcnLayer(
+                    in_channels=conf['in_ch'][i][j],
+                    out_channels=conf['out_ch'][i][j],
                     kernel_size=kernel_size,
                     partitions=A.size(0),
-                    stride=kwargs['stride'][i][j],
-                    residual=not not kwargs['residual'][i][j],
-                    dropout=kwargs['dropout'][i][j])
+                    stride=conf['stride'][i][j],
+                    residual=not not conf['residual'][i][j],
+                    dropout=conf['dropout'][i][j])
                 for j in range(layers_in_stage)] 
-                for i, layers_in_stage in enumerate(kwargs['layers'])]
-        self.st_gcn_networks = nn.ModuleList([module for sublist in stack for module in sublist])
+                for i, layers_in_stage in enumerate(conf['layers'])]
+        self.gcn_networks = nn.ModuleList([module for sublist in stack for module in sublist])
 
         # initialize parameters for edge importance weighting
-        if kwargs['importance']:
+        if conf['importance']:
             self.edge_importance = nn.ParameterList([
                 nn.Parameter(torch.ones(self.A.size()))
-                for _ in self.st_gcn_networks
+                for _ in self.gcn_networks
             ])
         else:
-            self.edge_importance = [1] * len(self.st_gcn_networks)
+            self.edge_importance = [1] * len(self.gcn_networks)
 
         # fcn for prediction
-        self.fcn = nn.Conv2d(
-            kwargs['out_ch'][-1][-1],
+        self.fcn_out = nn.Conv2d(
+            conf['out_ch'][-1][-1],
             out_channels=kwargs['num_classes'],
             kernel_size=1)
 
 
     def forward(self, x):
-        # data normalization
-        N, C, T, V = x.size()
-        # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
-        # this incures extra overhead
-        x = x.permute(0, 3, 1, 2).contiguous()
-        # (N,V,C,T)
-        x = x.view(N, V * C, T)
-        x = self.data_bn(x)
-        x = x.view(N, V, C, T)
-        x = x.permute(0, 2, 3, 1)
-        # (N,C,T,V)
+        # # data normalization
+        # N, C, T, V = x.size()
+        # # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
+        # # this incures extra overhead
+        # x = x.permute(0, 3, 1, 2).contiguous()
+        # # (N,V,C,T)
+        # x = x.view(N, V * C, T)
+        # x = self.data_bn(x)
+        # x = x.view(N, V, C, T)
+        # x = x.permute(0, 2, 3, 1)
+        # # (N,C,T,V)
 
         # remap the features to the network size
         x = self.fcn_in(x)
 
         # forward
-        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
+        for gcn, importance in zip(self.gcn_networks, self.edge_importance):
             x = gcn(x, self.A * importance)
 
         # global pooling (across time L, and nodes V)
         x = F.avg_pool2d(x, x.size()[2:])
 
         # prediction
-        x = self.fcn(x)
+        x = self.fcn_out(x)
 
         return x
 
 
-    def extract_feature(self, x):
-        # data normalization
-        N, C, T, V, M = x.size()
-        # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
-        # this incures extra overhead
-        x = x.permute(0, 4, 3, 1, 2).contiguous()
-        # (N,M,V,C,T)
-        x = x.view(N * M, V * C, T)
-        x = self.data_bn(x)
-        x = x.view(N, M, V, C, T)
-        x = x.permute(0, 1, 3, 4, 2).contiguous()
-        x = x.view(N * M, C, T, V)
-        # (N',C,T,V)
-
-        # remap the features to the network size
-        x = self.fcn_in(x)
-
-        # forward
-        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            x, _ = gcn(x, self.A * importance)
-
-        # global pooling (across time L, and nodes V)
-        x = F.avg_pool2d(x, x.size()[2:])
-
-        feature = x.squeeze(-1)
-
-        # prediction
-        x = self.fcn(x)
-        output = x.squeeze(-1)
-
-        return output, feature
-
-
-class st_gcn(nn.Module):
+class StgcnLayer(nn.Module):
     """Applies a spatial temporal graph convolution over an input graph sequence.
     Args:
         in_channels (int): Number of channels in the input sequence data
@@ -181,7 +147,7 @@ class st_gcn(nn.Module):
             partitions)
 
         self.tcn = nn.Sequential(
-            nn.BatchNorm2d(out_channels, track_running_stats=False),
+            # nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.ReLU(inplace=True),
             nn.Conv2d(
                 out_channels,
@@ -189,7 +155,7 @@ class st_gcn(nn.Module):
                 (kernel_size[0], 1),
                 stride=(stride, 1),
                 padding=padding),
-            nn.BatchNorm2d(out_channels, track_running_stats=False),
+            # nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.Dropout(dropout, inplace=True))
 
         if not residual:
@@ -205,7 +171,8 @@ class st_gcn(nn.Module):
                     out_channels,
                     kernel_size=1,
                     stride=(stride, 1)),
-                nn.BatchNorm2d(out_channels, track_running_stats=False))
+                # nn.BatchNorm2d(out_channels, track_running_stats=False)
+                )
 
         self.relu = nn.ReLU(inplace=True)
 

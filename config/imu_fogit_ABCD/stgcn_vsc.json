@@ -1,6 +1,6 @@
 {
     "model": {
-        "model": "realtime",
+        "model": "st-gcn",
         "strategy": "spatial",
         "data": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/imu_fogit_ABCD",
         "dataset_type": "dir",
@@ -9,13 +9,13 @@
         "actions": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/imu_fogit_ABCD/actions.txt",
         "graph": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/skeletons/imu_fogit_ABCD.json",
         "in_feat": 6,
-        "buffer": 1,
         "stages": 1,
         "layers": [9],
         "kernel": [9],
-        "segment": 100,
+        "segment": 300,
         "latency": false,
         "importance": true,
+        "receptive_field": 300,
         "in_ch": [
             [64,64,64,64,128,128,128,256,256]
         ],
@@ -36,7 +36,7 @@
     "optimizer": {
         "seed": 1538574472,
         "epochs": 100,
-        "checkpoints": [
+        "checkpoint_indices": [
             0,1,2,3,4,5,6,7,8,9,
             10,11,12,13,14,15,16,17,18,19,
             20,21,22,23,24,25,26,27,28,29,

@@ -1,0 +1,66 @@
+{
+    "processor": {
+        "model": "ms-gcn",
+        "data": "data/pku-mmdv1",
+        "dataset_type": "dir",
+        "out": "pretrained_models/pku-mmdv1",
+        "actions": "data/pku-mmdv1/actions.txt",
+        "graph": "data/skeletons/pku-mmd.json",
+        "demo": [3,1,2],
+        "iou_threshold": [0.1,0.25,0.5]
+    },
+    "arch": {
+        "strategy": "spatial",
+        "segment": 100,
+        "receptive_field": 300,
+        "in_feat": 3,
+        "stages": 4,
+        "refine": "probability",
+        "probability": "logsoftmax",
+        "st-gcn": {
+            "latency": false,
+            "importance": true,
+            "in_feat": 3,
+            "stages": 1,
+            "layers": [9],
+            "kernel": [9],
+            "in_ch": [
+                [64,64,64,64,128,128,128,256,256]
+            ],
+            "out_ch": [
+                [64,64,64,128,128,128,256,256,256]
+            ],
+            "stride": [
+                [1,1,1,2,1,1,2,1,1]
+            ],
+            "residual": [
+                [1,1,1,1,1,1,1,1,1]
+            ],
+            "dropout": [
+                [0,0,0,0,0,0,0,0,0]
+            ]
+        },
+        "ms-tcn": {
+            "latency": false,
+            "importance": true,
+            "stages": 3,
+            "layers": [10,10,10],
+            "kernel": [3,3,3],
+            "filters": [64,64,64],
+            "dropout": [0,0,0]
+        }
+    },
+    "optimizer": {
+        "seed": 1538574472,
+        "epochs": 100,
+        "checkpoint_indices": [9,19,29,39,49,59,69,79,89],
+        "learning_rate": 0.0005,
+        "learning_rate_decay": 1.0,
+        "batch_size": 64
+    },
+    "job": {
+        "email": "maxim.yudayev@kuleuven.be",
+        "log": [null,null],
+        "verbose": 0
+    }
+}

@@ -36,6 +36,7 @@ class Graph():
         edge,
         center,
         strategy = 'spatial',
+        normalization = 'symmetric',
         max_hop = 1,
         dilation = 1,
         alpha = 0.001):
@@ -44,7 +45,7 @@ class Graph():
             num_node : ``int``
                 number of joints in the skeleton.
             
-            edge : ``list[list[int]]``
+            edges : ``list[list[int]]``
                 edge list of joint index tuples.
             
             center : ``int``
@@ -64,6 +65,11 @@ class Graph():
                     ``'uniform'``: Uniform Labeling.
                     ``'distance'``: Distance Partitioning.
                     ``'spatial'``: Spatial Partitioning.
+
+            normalization : ``string``
+                must be one of the following:
+                    ``'symmetric'``: Symmetrically multipled from both sides by diagonal matrix to the -0.5 power.
+                    ``'nonsymmetric'``: Multipled by the inverted diagonal matrix.
             
             For more information, please refer to the section 'Partition Strategies' in 
                 [Yan et al. (2018)](https://arxiv.org/abs/1801.07455).
@@ -77,11 +83,26 @@ class Graph():
         self.alpha = alpha
 
         self.hop_dis = self.get_hop_distance()
-        self.A = self.get_adjacency(strategy)
+        self._A = self.get_adjacency('spatial')
+        self.A = self.normalize_adjacency(
+            self.get_adjacency(strategy), 
+            self.normalize_sym if normalization=='symmetric' else self.normalize_nonsym)
 
 
     def __str__(self):
         return self.A
+
+
+    def get_adjacency_raw(self):
+        """Returns spatially partitioned adjacency matrix, last dimension of which can be used to process joint coordinates into bone vectors.
+        
+        Returns:
+            Unnormalized adjacency matrix of size ``(P, V, V)``, where:
+                ``P=3`` : Partitions in the order "self", "close", "far", w.r.t. COG node.
+                ``V`` : Number of nodes in the skeleton.
+        """
+
+        return self._A
 
 
     def get_adjacency(self, strategy):
@@ -89,16 +110,13 @@ class Graph():
 
         Uses symmetric normalization method.
 
-        TODO:
-            ``1.`` Enable selection between normalization methods.
-
         Args:
             strategy : ``str``
                 must be one of the following:
                     ``'uniform'``: Uniform Labeling.
                     ``'distance'``: Distance Partitioning.
                     ``'spatial'``: Spatial Partitioning.
-        
+
         Returns:
             Normalized adjacency matrix of size ``(P, V, V)``, where:
                 ``P`` : Number of partitions, according to the partitioning strategy.
@@ -112,7 +130,6 @@ class Graph():
         adjacency = np.zeros((self.num_node, self.num_node))
         for hop in valid_hop:
             adjacency[self.hop_dis == hop] = 1
-        # adjacency = self.normalize_undigraph(adjacency)
 
         if strategy == 'uniform':
             A = np.zeros((1, self.num_node, self.num_node))
@@ -133,11 +150,11 @@ class Graph():
                         if self.hop_dis[i, j] == hop:
                             if self.hop_dis[j, self.center] == self.hop_dis[i, self.center]:
                                 a_root[i, j] = adjacency[i, j]
-                            elif (self.hop_dis[j, self.center] < self.hop_dis[i, self.center] or 
-                                (i == self.center and self.hop_dis[j, self.center] > self.hop_dis[i, self.center])):
-                                # COG node and limb ends have only "close" nodes
+                            elif (self.hop_dis[j, self.center] < self.hop_dis[i, self.center]):
+                                # limb ends have only "close" nodes
                                 a_close[i, j] = adjacency[i, j]
                             else:
+                                # COG node has only "far" nodes
                                 a_far[i, j] = adjacency[i, j]
                 if hop == 0:
                     A.append(a_root)
@@ -150,10 +167,16 @@ class Graph():
         else:
             raise ValueError("Strategy Does Not Exist.")
         
+        return A
+
+
+    def normalize_adjacency(self, A, foo):
         # normalization of the adjacency matrix must be done after partitioning
         for i in range(A.shape[0]):
-            A[i] = self.normalize_undigraph(A[i])
-        return A
+            A[i] = foo(A[i])
+        
+        # normalized row values are the inner dimension for adjacency matrix multiplication with data tensor's node dimension last
+        return A.transpose(0,2,1)
 
 
     def get_hop_distance(self):
@@ -182,7 +205,7 @@ class Graph():
         return cost
 
 
-    def normalize_digraph(self, A):
+    def normalize_nonsym(self, A):
         """Asymmetric normalization with the degree matrix.
 
         Args:
@@ -193,14 +216,15 @@ class Graph():
             Normalized adjacency matrix of the same size.
         """
 
-        Dl = np.power(np.sum(A, 1),-1)
+        Dl = np.power(np.sum(A, 1)+self.alpha,-1)
         Dl[np.isinf(Dl)] = 0
+        # Dl[np.isinf(Dl)] = self.alpha
         Dn = np.eye(A.shape[0]) * Dl
         AD = np.dot(A, Dn)
         return AD
 
 
-    def normalize_undigraph(self, A):
+    def normalize_sym(self, A):
         """Symmetric normalization with the degree matrix.
 
         Args:
@@ -211,8 +235,9 @@ class Graph():
             Normalized adjacency matrix of the same size.
         """
 
-        Dl = np.power(np.sum(A, 1),-0.5)
+        Dl = np.power(np.sum(A, 1)+self.alpha,-0.5)
         Dl[np.isinf(Dl)] = 0
+        # Dl[np.isinf(Dl)] = self.alpha
         Dn = np.eye(A.shape[0]) * Dl
         DAD = np.dot(np.dot(Dn, A), Dn)
         return DAD
