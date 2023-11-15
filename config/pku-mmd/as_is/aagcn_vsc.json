@@ -1,24 +1,26 @@
 {
     "processor": {
-        "model": "ms-gcn",
+        "model": "aa-gcn",
         "data": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1",
         "dataset_type": "dir",
         "out": "/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
         "backup": "/data/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
         "actions": "/data/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1/actions.txt",
         "graph": "/data/leuven/341/vsc34153/rt-st-gcn/data/skeletons/pku-mmd.json",
-        "demo": [175, 293, 37],
+        "demo": [175,293,37],
         "iou_threshold": [0.1,0.25,0.5]
     },
     "arch": {
         "strategy": "spatial",
-        "segment": 100,
-        "receptive_field": 300,
+        "segment": 250,
+        "receptive_field": 50,
         "in_feat": 3,
-        "stages": 4,
-        "refine": "probability",
-        "probability": "logsoftmax",
-        "st-gcn": {
+        "stages": 1,
+        "probability": "softmax",
+        "stream_sum": "probability",
+        "is_bn": true,
+        "is_bn_stats": true,
+        "aa-gcn": {
             "latency": false,
             "importance": true,
             "in_feat": 3,
@@ -40,24 +42,25 @@
             "dropout": [
                 [0,0,0,0,0,0,0,0,0]
             ]
-        },
-        "ms-tcn": {
-            "latency": false,
-            "importance": true,
-            "stages": 3,
-            "layers": [10,10,10],
-            "kernel": [3,3,3],
-            "filters": [64,64,64],
-            "dropout": [0,0,0]
         }
     },
     "optimizer": {
         "seed": 1538574472,
-        "epochs": 100,
-        "checkpoint_indices": [9,19,29,39,49,59,69,79,89],
+        "epochs": 50,
+        "checkpoint_indices": [
+            0,1,2,3,4,5,6,7,8,9,
+            10,11,12,13,14,15,16,17,18,19,
+            20,21,22,23,24,25,26,27,28,29,
+            30,31,32,33,34,35,36,37,38,39,
+            40,41,42,43,44,45,46,47,48,49,
+            50,51,52,53,54,55,56,57,58,59,
+            60,61,62,63,64,65,66,67,68,69,
+            70,71,72,73,74,75,76,77,78,79,
+            80,81,82,83,84,85,86,87,88,89,
+            90,91,92,93,94,95,96,97,98],
         "learning_rate": 0.0005,
         "learning_rate_decay": 1.0,
-        "batch_size": 64
+        "batch_size": 128
     },
     "job": {
         "email": "maxim.yudayev@kuleuven.be",
