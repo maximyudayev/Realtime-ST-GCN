@@ -26,13 +26,13 @@ class Model(nn.Module):
         self.segment = kwargs['segment']
         self.num_classes = kwargs['num_classes']
         self.rank = rank
-        
-        if kwargs['stream_sum']=='logits':
-            self.probability = lambda x: x
-        elif kwargs['probability']=='logsoftmax':
-            self.probability = lambda x: F.log_softmax(x, dim=1)
-        else:
-            self.probability = lambda x: F.softmax(x, dim=1)
+
+        # input capture normalization
+        # (N,C,L,V)
+        self.is_bn = kwargs['is_bn']
+
+        if self.is_bn:
+            self.data_bn = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=kwargs['is_bn_stats'])
 
         self.streams = nn.ModuleList([nn.ModuleDict({
             "fcn_in": nn.Conv2d(
@@ -52,7 +52,9 @@ class Model(nn.Module):
                     num_joints=kwargs['graph']['num_node'],
                     importance=conf['importance'],
                     segment=kwargs['segment'],
-                    receptive_field=kwargs['receptive_field'])
+                    receptive_field=kwargs['receptive_field'],
+                    is_bn=kwargs['is_bn'],
+                    track_running_stats=kwargs.get('is_bn_stats'))
                 for j in range(layers_in_stage)] 
                 for i, layers_in_stage in enumerate(conf['layers'])] for module in sublist]),
             "fcn_out": nn.Conv2d(
@@ -60,6 +62,13 @@ class Model(nn.Module):
                 out_channels=kwargs['num_classes'],
                 kernel_size=1)
         }) for _ in ['joints','bones']])
+
+        if kwargs['stream_sum']=='logits':
+            self.probability = lambda x: x
+        elif kwargs['probability']=='logsoftmax':
+            self.probability = lambda x: F.log_softmax(x, dim=1)
+        else:
+            self.probability = lambda x: F.softmax(x, dim=1)
 
 
     def forward(self, x_joint):
@@ -77,6 +86,19 @@ class Model(nn.Module):
 
         # pass both streams through the coresponding branch and add prediction probabilities
         for data, modules in zip((x_joint, x_bone), self.streams):
+            if self.is_bn:
+                # data normalization
+                N, C, T, V = data.size()
+                # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
+                # this incures extra overhead
+                data = data.permute(0, 3, 1, 2).contiguous()
+                # (N,V,C,T)
+                data = data.view(N, V * C, T)
+                data = self.data_bn(data)
+                data = data.view(N, V, C, T)
+                data = data.permute(0, 2, 3, 1)
+                # (N,C,T,V)
+
             # remap the features to the network size
             data = modules['fcn_in'](data)
             
@@ -110,7 +132,9 @@ class AgcnLayer(nn.Module):
         num_joints,
         importance,
         segment,
-        receptive_field):
+        receptive_field,
+        is_bn=True,
+        track_running_stats=True):
 
         super(AgcnLayer, self).__init__()
 
@@ -120,6 +144,7 @@ class AgcnLayer(nn.Module):
         self.segment = segment
         self.receptive_field = receptive_field
         self.partitions = partitions
+        self.num_joints = num_joints
 
         # fully-learnable adjacency matrix B, initialized as 0's
         self.B = nn.Parameter(torch.zeros(partitions, num_joints, num_joints, device=rank), requires_grad=True) if importance else 1
@@ -136,16 +161,18 @@ class AgcnLayer(nn.Module):
             partitions=partitions,
             stride=stride,
             dropout=dropout,
-            residual=residual)
+            residual=residual,
+            is_bn=is_bn,
+            track_running_stats=track_running_stats)
 
 
     def forward(self, x, A):
-        N, _, L, V = x.size()
+        L = x.size(2)
         # (N,C,L,V -> N,P,C'*L,V)
-        theta = self.theta(x).view(N, self.partitions, self.embedding_channels*L, V).permute(0,1,3,2)
-        phi = self.phi(x).view(N, self.partitions, self.embedding_channels*L, V)
+        theta = self.theta(x).view(self.segment, self.partitions, self.embedding_channels*L, self.num_joints).permute(0,1,3,2)
+        phi = self.phi(x).view(self.segment, self.partitions, self.embedding_channels*L, self.num_joints)
         # (N,P,V,V)
-        C = F.softmax(torch.matmul(theta,phi), dim=1)
+        C = F.softmax(torch.matmul(theta,phi), dim=3)
         
         # graph convolution
         x = self.st_gcn(x, A+self.B+C)

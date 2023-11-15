@@ -98,7 +98,10 @@ class Model(nn.Module):
 
         # input capture normalization
         # (N,C,L,V)
-        # self.bn_in = nn.BatchNorm2d(kwargs['in_feat'] * self.A.size(1))
+        self.is_bn = kwargs['is_bn']
+
+        if self.is_bn:
+            self.data_bn = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=kwargs['is_bn_stats'])
 
         # fcn for feature remapping of input to the network size
         self.fcn_in = nn.Conv2d(in_channels=self.conf['in_feat'], out_channels=self.conf['in_ch'][0][0], kernel_size=1)
@@ -116,7 +119,9 @@ class Model(nn.Module):
                     importance=self.conf['importance'],
                     graph=self.A,
                     segment=kwargs["segment"],
-                    rank=rank)
+                    rank=rank,
+                    is_bn=kwargs['is_bn'],
+                    track_running_stats=kwargs.get('is_bn_stats'))
                 for j in range(layers_in_stage)]
                 for i, layers_in_stage in enumerate(self.conf['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
@@ -139,17 +144,18 @@ class Model(nn.Module):
 
 
     def forward(self, x):
-        # # data normalization
-        # N, C, T, V = x.size()
-        # # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
-        # # this incures extra overhead
-        # x = x.permute(0, 3, 1, 2).contiguous()
-        # # (N,V,C,T)
-        # x = x.view(N, V * C, 1, T)
-        # x = self.bn_in(x)
-        # x = x.view(N, V, C, T)
-        # x = x.permute(0, 2, 3, 1)
-        # # (N,C,T,V)
+        if self.is_bn:
+            # data normalization
+            N, C, T, V = x.size()
+            # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
+            # this incures extra overhead
+            x = x.permute(0, 3, 1, 2).contiguous()
+            # (N,V,C,T)
+            x = x.view(N, V * C, T)
+            x = self.data_bn(x)
+            x = x.view(N, V, C, T)
+            x = x.permute(0, 2, 3, 1)
+            # (N,C,T,V)
 
         # remap the features to the network size
         x = self.fcn_in(x)
@@ -170,6 +176,7 @@ class Model(nn.Module):
 
 
     def _swap_layers_for_inference(self):
+        # TODO: update logic
         # stack of ST-GCN layers
         stack = [[OnlineLayer(
                     num_joints=self.A.shape[-1],
@@ -268,7 +275,9 @@ class OfflineLayer(nn.Module):
         importance,
         graph,
         segment,
-        rank):
+        rank,
+        is_bn=True,
+        track_running_stats=True):
         """
         Args:
             in_channels : ``int``
@@ -330,14 +339,15 @@ class OfflineLayer(nn.Module):
         # (out_channels is a multiple of the partition number
         # to avoid for-looping over several partitions)
         # partition-wise convolution results are basically stacked across channel-dimension
-        self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1, bias=False)
-        # self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1)
+        self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1)
 
         # normalization and dropout on main branch
-        self.bn_relu = nn.Sequential(
-            # nn.BatchNorm2d(out_channels, track_running_stats=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU())
+        if is_bn:
+            self.bn_relu = nn.Sequential(
+                nn.BatchNorm2d(out_channels, track_running_stats=track_running_stats),
+                nn.ReLU())
+        else:
+            self.bn_relu = nn.Sequential(nn.ReLU())
 
         # residual branch
         if not residual:
@@ -345,12 +355,13 @@ class OfflineLayer(nn.Module):
         elif (in_channels == out_channels) and (stride == 1):
             self.residual = lambda x: x
         else:
-            self.residual = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
-                # nn.Conv2d(in_channels, out_channels, kernel_size=1),
-                # nn.BatchNorm2d(out_channels, track_running_stats=False)
-                nn.BatchNorm2d(out_channels)
-            )
+            if is_bn:
+                self.residual = nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+                    nn.BatchNorm2d(out_channels, track_running_stats=False))
+            else:
+                self.residual = nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels, kernel_size=1))
 
         # activation of branch sum
         # if no resnet connection, prevent ReLU from being applied twice

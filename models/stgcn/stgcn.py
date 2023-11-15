@@ -42,7 +42,11 @@ class Model(nn.Module):
         temporal_kernel_size = conf['kernel'][0]
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
         
-        # self.data_bn = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
+        self.is_bn = kwargs['is_bn']
+
+        if self.is_bn:
+            self.data_bn = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=kwargs['is_bn_stats'])
+
         # fcn for feature remapping of input to the network size
         self.fcn_in = nn.Conv2d(in_channels=conf['in_feat'], out_channels=conf['in_ch'][0][0], kernel_size=1)
 
@@ -53,7 +57,9 @@ class Model(nn.Module):
                     partitions=A.size(0),
                     stride=conf['stride'][i][j],
                     residual=not not conf['residual'][i][j],
-                    dropout=conf['dropout'][i][j])
+                    dropout=conf['dropout'][i][j],
+                    is_bn=kwargs['is_bn'],
+                    track_running_stats=kwargs.get('is_bn_stats'))
                 for j in range(layers_in_stage)] 
                 for i, layers_in_stage in enumerate(conf['layers'])]
         self.gcn_networks = nn.ModuleList([module for sublist in stack for module in sublist])
@@ -75,17 +81,18 @@ class Model(nn.Module):
 
 
     def forward(self, x):
-        # # data normalization
-        # N, C, T, V = x.size()
-        # # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
-        # # this incures extra overhead
-        # x = x.permute(0, 3, 1, 2).contiguous()
-        # # (N,V,C,T)
-        # x = x.view(N, V * C, T)
-        # x = self.data_bn(x)
-        # x = x.view(N, V, C, T)
-        # x = x.permute(0, 2, 3, 1)
-        # # (N,C,T,V)
+        if self.is_bn:
+            # data normalization
+            N, C, T, V = x.size()
+            # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
+            # this incures extra overhead
+            x = x.permute(0, 3, 1, 2).contiguous()
+            # (N,V,C,T)
+            x = x.view(N, V * C, T)
+            x = self.data_bn(x)
+            x = x.view(N, V, C, T)
+            x = x.permute(0, 2, 3, 1)
+            # (N,C,T,V)
 
         # remap the features to the network size
         x = self.fcn_in(x)
@@ -132,7 +139,9 @@ class StgcnLayer(nn.Module):
         partitions,
         stride=1,
         dropout=0,
-        residual=True):
+        residual=True,
+        is_bn=True,
+        track_running_stats=True):
         
         super().__init__()
 
@@ -146,17 +155,29 @@ class StgcnLayer(nn.Module):
             kernel_size[1],
             partitions)
 
-        self.tcn = nn.Sequential(
-            # nn.BatchNorm2d(out_channels, track_running_stats=False),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(
-                out_channels,
-                out_channels,
-                (kernel_size[0], 1),
-                stride=(stride, 1),
-                padding=padding),
-            # nn.BatchNorm2d(out_channels, track_running_stats=False),
-            nn.Dropout(dropout, inplace=True))
+        if is_bn:
+            self.tcn = nn.Sequential(
+                nn.BatchNorm2d(out_channels, track_running_stats=track_running_stats),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(
+                    out_channels,
+                    out_channels,
+                    (kernel_size[0], 1),
+                    stride=(stride, 1),
+                    padding=padding),
+                nn.BatchNorm2d(out_channels, track_running_stats=track_running_stats),
+                nn.Dropout(dropout, inplace=True))
+        else:
+            self.tcn = nn.Sequential(
+                nn.ReLU(inplace=True),
+                nn.Conv2d(
+                    out_channels,
+                    out_channels,
+                    (kernel_size[0], 1),
+                    stride=(stride, 1),
+                    padding=padding),
+                nn.Dropout(dropout, inplace=True))
+            
 
         if not residual:
             self.residual = lambda x: 0
@@ -165,14 +186,21 @@ class StgcnLayer(nn.Module):
             self.residual = lambda x: x
 
         else:
-            self.residual = nn.Sequential(
-                nn.Conv2d(
-                    in_channels,
-                    out_channels,
-                    kernel_size=1,
-                    stride=(stride, 1)),
-                # nn.BatchNorm2d(out_channels, track_running_stats=False)
-                )
+            if is_bn:
+                self.residual = nn.Sequential(
+                    nn.Conv2d(
+                        in_channels,
+                        out_channels,
+                        kernel_size=1,
+                        stride=(stride, 1)),
+                    nn.BatchNorm2d(out_channels, track_running_stats=track_running_stats))
+            else:
+                self.residual = nn.Sequential(
+                    nn.Conv2d(
+                        in_channels,
+                        out_channels,
+                        kernel_size=1,
+                        stride=(stride, 1)))
 
         self.relu = nn.ReLU(inplace=True)
 

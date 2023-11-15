@@ -19,18 +19,14 @@ def plot_confusion_matrix_rt():
 def plot_segmentation_masks():
     fig, axs = plt.subplots(3)
 
-    trials = [37]
-    # trials = [37, 175, 293]
-    # letters = ['a)','b)','c)']
+    trials = [175,293,37]
+    letters = ['a)','b)','c)']
     paths = [
-        'pretrained_models/pku-mmdv1/realtime/train_9_64_50',
-        'pretrained_models/pku-mmdv1/realtime/train_21_64_50',
-        'pretrained_models/pku-mmdv1/realtime/train_69_64_50',
-        'pretrained_models/pku-mmdv1/realtime/train_153_64_50',
-        'pretrained_models/pku-mmdv1/realtime/train_299_64_50',
-        'pretrained_models/pku-mmdv1/original/train_9_50_64_50',
-        'pretrained_models/pku-mmdv1/original/train_21_50_64_50',
-        'pretrained_models/pku-mmdv1/original/train_69_50_64_50',]
+        'pretrained_models/pku-mmdv1/stgcn',
+        'pretrained_models/pku-mmdv1/rtstgcn',
+        'pretrained_models/pku-mmdv1/aagcn',
+        'pretrained_models/pku-mmdv1/mstcn',
+        'pretrained_models/pku-mmdv1/msgcn']
 
     for i in range(len(trials)):
         with open('{0}/segmentation-{1}.csv'.format(paths[0],trials[i]),'r') as f:
@@ -47,18 +43,15 @@ def plot_segmentation_masks():
         
         labels = [
             'Ground Truth',
-            'RT-ST-GCN$_{\Gamma=9}$',
-            'RT-ST-GCN$_{\Gamma=21}$',
-            'RT-ST-GCN$_{\Gamma=69}$',
-            'RT-ST-GCN$_{\Gamma=153}$',
-            'RT-ST-GCN$_{\Gamma=299}$',
-            'ST-GCN$_{L=50,\Gamma=9}$',
-            'ST-GCN$_{L=50,\Gamma=21}$',
-            'ST-GCN$_{L=50,\Gamma=69}$']
+            'ST-GCN',
+            'RT-ST-GCN',
+            '2s-AGCN',
+            'MS-TCN',
+            'MS-GCN']
 
         axs[i].imshow(np.concatenate((mask_label, mask_prediction), axis=0), cmap='terrain_r', vmin=0.0, vmax=51.0, aspect='auto', interpolation='nearest')
         # axs[i].set_ylabel(letters[i], rotation=0, fontsize='xx-large', fontweight='bold')
-        axs[i].set_yticks([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], labels=labels, fontsize='x-large')
+        axs[i].set_yticks([0.0, 1.0, 2.0, 3.0, 4.0, 5.0], labels=labels, fontsize='x-large')
         axs[i].tick_params(length=0.0)
         axs[i].set_frame_on(False)
 
@@ -133,6 +126,6 @@ def plot_accuracy_gap():
     plt.show()
 
 
-plot_accuracy_gap()
+# plot_accuracy_gap()
 # plot_confusion_matrix_rt()
-# plot_segmentation_masks()
+plot_segmentation_masks()
