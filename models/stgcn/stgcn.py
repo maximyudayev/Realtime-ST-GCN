@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.utils import ConvTemporalGraphical, Graph
+from models.utils import ConvTemporalGraphical, Graph, LayerNorm
 
 
 class Model(nn.Module):
@@ -39,30 +39,25 @@ class Model(nn.Module):
 
         # build networks
         spatial_kernel_size = kwargs['graph']['num_node']
-        temporal_kernel_size = conf['kernel'][0]
+        temporal_kernel_size = conf['kernel']
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
         
-        self.is_bn = kwargs['is_bn']
-
-        if self.is_bn:
-            self.data_bn = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=kwargs['is_bn_stats'])
+        self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)])
 
         # fcn for feature remapping of input to the network size
-        self.fcn_in = nn.Conv2d(in_channels=conf['in_feat'], out_channels=conf['in_ch'][0][0], kernel_size=1)
+        self.fcn_in = nn.Conv2d(in_channels=conf['in_feat'], out_channels=conf['in_ch'][0], kernel_size=1)
 
-        stack = [[StgcnLayer(
-                    in_channels=conf['in_ch'][i][j],
-                    out_channels=conf['out_ch'][i][j],
-                    kernel_size=kernel_size,
-                    partitions=A.size(0),
-                    stride=conf['stride'][i][j],
-                    residual=not not conf['residual'][i][j],
-                    dropout=conf['dropout'][i][j],
-                    is_bn=kwargs['is_bn'],
-                    track_running_stats=kwargs.get('is_bn_stats'))
-                for j in range(layers_in_stage)] 
-                for i, layers_in_stage in enumerate(conf['layers'])]
-        self.gcn_networks = nn.ModuleList([module for sublist in stack for module in sublist])
+        self.gcn_networks = nn.ModuleList([
+            StgcnLayer(
+                in_channels=conf['in_ch'][i],
+                out_channels=conf['out_ch'][i],
+                kernel_size=kernel_size,
+                partitions=A.size(0),
+                num_joints=A.size(1),
+                stride=conf['stride'][i],
+                residual=not not conf['residual'][i],
+                dropout=conf['dropout'][i])
+            for i in range(conf['layers'])])
 
         # initialize parameters for edge importance weighting
         if conf['importance']:
@@ -75,24 +70,14 @@ class Model(nn.Module):
 
         # fcn for prediction
         self.fcn_out = nn.Conv2d(
-            conf['out_ch'][-1][-1],
+            conf['out_ch'][-1],
             out_channels=kwargs['num_classes'],
             kernel_size=1)
 
 
     def forward(self, x):
-        if self.is_bn:
-            # data normalization
-            N, C, T, V = x.size()
-            # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
-            # this incures extra overhead
-            x = x.permute(0, 3, 1, 2).contiguous()
-            # (N,V,C,T)
-            x = x.view(N, V * C, T)
-            x = self.data_bn(x)
-            x = x.view(N, V, C, T)
-            x = x.permute(0, 2, 3, 1)
-            # (N,C,T,V)
+        # data normalization
+        x = self.norm_in(x)
 
         # remap the features to the network size
         x = self.fcn_in(x)
@@ -137,12 +122,11 @@ class StgcnLayer(nn.Module):
         out_channels,
         kernel_size,
         partitions,
+        num_joints,
         stride=1,
         dropout=0,
-        residual=True,
-        is_bn=True,
-        track_running_stats=True):
-        
+        residual=True):
+
         super().__init__()
 
         assert len(kernel_size) == 2
@@ -155,52 +139,30 @@ class StgcnLayer(nn.Module):
             kernel_size[1],
             partitions)
 
-        if is_bn:
-            self.tcn = nn.Sequential(
-                nn.BatchNorm2d(out_channels, track_running_stats=track_running_stats),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(
-                    out_channels,
-                    out_channels,
-                    (kernel_size[0], 1),
-                    stride=(stride, 1),
-                    padding=padding),
-                nn.BatchNorm2d(out_channels, track_running_stats=track_running_stats),
-                nn.Dropout(dropout, inplace=True))
-        else:
-            self.tcn = nn.Sequential(
-                nn.ReLU(inplace=True),
-                nn.Conv2d(
-                    out_channels,
-                    out_channels,
-                    (kernel_size[0], 1),
-                    stride=(stride, 1),
-                    padding=padding),
-                nn.Dropout(dropout, inplace=True))
-            
+        self.tcn = nn.Sequential(
+            LayerNorm([out_channels, 1, num_joints]),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                (kernel_size[0], 1),
+                stride=(stride, 1),
+                padding=padding),
+            LayerNorm([out_channels, 1, num_joints]),
+            nn.Dropout(dropout, inplace=True))
 
         if not residual:
             self.residual = lambda x: 0
-
         elif (in_channels == out_channels) and (stride == 1):
             self.residual = lambda x: x
-
         else:
-            if is_bn:
-                self.residual = nn.Sequential(
-                    nn.Conv2d(
-                        in_channels,
-                        out_channels,
-                        kernel_size=1,
-                        stride=(stride, 1)),
-                    nn.BatchNorm2d(out_channels, track_running_stats=track_running_stats))
-            else:
-                self.residual = nn.Sequential(
-                    nn.Conv2d(
-                        in_channels,
-                        out_channels,
-                        kernel_size=1,
-                        stride=(stride, 1)))
+            self.residual = nn.Sequential(
+                nn.Conv2d(
+                    in_channels,
+                    out_channels,
+                    kernel_size=1,
+                    stride=(stride, 1)),
+                LayerNorm([out_channels, 1, num_joints]))
 
         self.relu = nn.ReLU(inplace=True)
 

@@ -39,7 +39,8 @@ class Metric:
         return self.metric
 
     def reduce(self, dst):
-        reduce(self.metric, dst=dst, op=torch.distributed.ReduceOp.SUM)
+        if dst is not None:
+            reduce(self.metric, dst=dst, op=torch.distributed.ReduceOp.SUM)
         return None
 
     def save(self, save_dir, suffix):

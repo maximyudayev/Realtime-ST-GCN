@@ -10,7 +10,7 @@
             "args": [
                 "train",
                 "--config",
-                "config/pku-mmd/as_is/msgcn_local.json",
+                "config/pku-mmd/as_is/mstcn_local.json",
             ]
         },
         {

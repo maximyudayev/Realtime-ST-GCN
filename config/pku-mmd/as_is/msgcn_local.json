@@ -7,7 +7,8 @@
         "actions": "data/pku-mmdv1/actions.txt",
         "graph": "data/skeletons/pku-mmd.json",
         "demo": [175,293,37],
-        "iou_threshold": [0.1,0.25,0.5]
+        "iou_threshold": [0.1,0.25,0.5],
+        "is_ddp": true
     },
     "arch": {
         "strategy": "spatial",
@@ -15,32 +16,20 @@
         "receptive_field": 50,
         "in_feat": 3,
         "stages": 4,
-        "refine": "probability",
-        "probability": "logsoftmax",
-        "is_bn": true,
-        "is_bn_stats": true,
+        "refine": "softmax",
+        "output_type": "logits",
         "st-gcn": {
             "latency": false,
             "importance": true,
             "in_feat": 3,
             "stages": 1,
-            "layers": [9],
-            "kernel": [9],
-            "in_ch": [
-                [64,64,64,64,128,128,128,256,256]
-            ],
-            "out_ch": [
-                [64,64,64,128,128,128,256,256,256]
-            ],
-            "stride": [
-                [1,1,1,2,1,1,2,1,1]
-            ],
-            "residual": [
-                [1,1,1,1,1,1,1,1,1]
-            ],
-            "dropout": [
-                [0,0,0,0,0,0,0,0,0]
-            ]
+            "layers": 9,
+            "kernel": 9,
+            "in_ch": [64,64,64,64,128,128,128,256,256],
+            "out_ch": [64,64,64,128,128,128,256,256,256],
+            "stride": [1,1,1,2,1,1,2,1,1],
+            "residual": [1,1,1,1,1,1,1,1,1],
+            "dropout": [0,0,0,0,0,0,0,0,0]
         },
         "ms-tcn": {
             "latency": false,
@@ -68,7 +57,7 @@
             90,91,92,93,94,95,96,97,98],
         "learning_rate": 0.0005,
         "learning_rate_decay": 1.0,
-        "batch_size": 128
+        "batch_size": 16
     },
     "job": {
         "email": "maxim.yudayev@kuleuven.be",

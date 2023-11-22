@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.utils import Graph
+from models.utils import Graph, LayerNorm
 from models.stgcn.stgcn import StgcnLayer
 
 
@@ -20,54 +20,45 @@ class Model(nn.Module):
 
         # build networks
         spatial_kernel_size = kwargs['graph']['num_node']
-        temporal_kernel_size = conf['kernel'][0]
+        temporal_kernel_size = conf['kernel']
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
         
         self.segment = kwargs['segment']
         self.num_classes = kwargs['num_classes']
         self.rank = rank
 
-        # input capture normalization
-        # (N,C,L,V)
-        self.is_bn = kwargs['is_bn']
-
-        if self.is_bn:
-            self.data_bn = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=kwargs['is_bn_stats'])
-
         self.streams = nn.ModuleList([nn.ModuleDict({
+            "norm_in": LayerNorm([kwargs['in_feat'], 1, A.size(1)]),
             "fcn_in": nn.Conv2d(
                 in_channels=conf['in_feat'], 
-                out_channels=conf['in_ch'][0][0], 
+                out_channels=conf['in_ch'][0], 
                 kernel_size=1),
             "gcn_networks": nn.ModuleList([
-                module for sublist in [[AgcnLayer(
+                AgcnLayer(
                     rank=rank,
-                    in_channels=conf['in_ch'][i][j],
-                    out_channels=conf['out_ch'][i][j],
+                    in_channels=conf['in_ch'][i],
+                    out_channels=conf['out_ch'][i],
                     kernel_size=kernel_size,
                     partitions=A.size(0),
-                    stride=conf['stride'][i][j],
-                    residual=not not conf['residual'][i][j],
-                    dropout=conf['dropout'][i][j],
+                    stride=conf['stride'][i],
+                    residual=not not conf['residual'][i],
+                    dropout=conf['dropout'][i],
                     num_joints=kwargs['graph']['num_node'],
                     importance=conf['importance'],
                     segment=kwargs['segment'],
-                    receptive_field=kwargs['receptive_field'],
-                    is_bn=kwargs['is_bn'],
-                    track_running_stats=kwargs.get('is_bn_stats'))
-                for j in range(layers_in_stage)] 
-                for i, layers_in_stage in enumerate(conf['layers'])] for module in sublist]),
+                    receptive_field=kwargs['receptive_field'])
+                for i in range(conf['layers'])]),
             "fcn_out": nn.Conv2d(
-                in_channels=conf['out_ch'][-1][-1],
+                in_channels=conf['out_ch'][-1],
                 out_channels=kwargs['num_classes'],
                 kernel_size=1)
         }) for _ in ['joints','bones']])
 
-        if kwargs['stream_sum']=='logits':
+        if kwargs['output_type']=='logits':
             self.probability = lambda x: x
-        elif kwargs['probability']=='logsoftmax':
+        elif kwargs['output_type']=='logsoftmax':
             self.probability = lambda x: F.log_softmax(x, dim=1)
-        else:
+        elif kwargs['output_type']=='softmax':
             self.probability = lambda x: F.softmax(x, dim=1)
 
 
@@ -86,18 +77,8 @@ class Model(nn.Module):
 
         # pass both streams through the coresponding branch and add prediction probabilities
         for data, modules in zip((x_joint, x_bone), self.streams):
-            if self.is_bn:
-                # data normalization
-                N, C, T, V = data.size()
-                # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
-                # this incures extra overhead
-                data = data.permute(0, 3, 1, 2).contiguous()
-                # (N,V,C,T)
-                data = data.view(N, V * C, T)
-                data = self.data_bn(data)
-                data = data.view(N, V, C, T)
-                data = data.permute(0, 2, 3, 1)
-                # (N,C,T,V)
+            # normalize inputs
+            data = modules['norm_in'](data)
 
             # remap the features to the network size
             data = modules['fcn_in'](data)
@@ -106,7 +87,7 @@ class Model(nn.Module):
             for gcn in modules['gcn_networks']:
                 data = gcn(data, self.A)
             
-            # global pooling (across time L, and nodes V
+            # global pooling (across time L, and nodes V)
             data = F.avg_pool2d(data, data.size()[2:])
 
             # prediction
@@ -132,9 +113,7 @@ class AgcnLayer(nn.Module):
         num_joints,
         importance,
         segment,
-        receptive_field,
-        is_bn=True,
-        track_running_stats=True):
+        receptive_field):
 
         super(AgcnLayer, self).__init__()
 
@@ -159,11 +138,10 @@ class AgcnLayer(nn.Module):
             out_channels=out_channels,
             kernel_size=kernel_size,
             partitions=partitions,
+            num_joints=num_joints,
             stride=stride,
             dropout=dropout,
-            residual=residual,
-            is_bn=is_bn,
-            track_running_stats=track_running_stats)
+            residual=residual)
 
 
     def forward(self, x, A):

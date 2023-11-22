@@ -35,10 +35,18 @@ class Model(nn.Module):
 
         if kwargs['refine']=='logits':
             self.probability = lambda x: x
-        elif kwargs['probability']=='logsoftmax':
+        elif kwargs['refine']=='logsoftmax':
             self.probability = lambda x: F.log_softmax(x, dim=1)
-        else:
+        elif kwargs['refine']=='softmax':
             self.probability = lambda x: F.softmax(x, dim=1)
+
+        if kwargs['output_type']=='logits':
+            self.out = lambda x: x
+        elif kwargs['output_type']=='logsoftmax':
+            self.out = lambda x: F.log_softmax(x, dim=1)
+        elif kwargs['output_type']=='softmax':
+            self.out = lambda x: F.softmax(x, dim=1)
+
 
     def forward(self, x):
         # NOTE: original implementation passes probabilities to refinement stages, not logits
@@ -49,11 +57,11 @@ class Model(nn.Module):
         # pool features at the output of the generators stage across the joint dimension
         x = F.avg_pool2d(x, (1, x.size(-1)))
         # (1,C,L,1)
-        outputs[0] = x.squeeze(-1)
+        outputs[0] = self.out(x.squeeze(-1))
 
         for i, stage in enumerate(self.refinement_stages):
             x = stage(self.probability(x))
-            outputs[i+1] = x.squeeze(-1)
+            outputs[i+1] = self.out(x.squeeze(-1))
         return outputs
 
 

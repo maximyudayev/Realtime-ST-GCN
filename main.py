@@ -61,10 +61,12 @@ def train(rank, world_size, args):
     model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args)
 
     # list metrics that Processor should record
+    metric_rank = rank if args.processor['is_ddp'] or not torch.cuda.is_available() else torch.device("cuda:0")
+    metric_world_size = world_size if args.processor['is_ddp'] and torch.cuda.is_available() else 1
     metrics = [
-        F1Score(rank, world_size, args.arch['num_classes'], args.processor['iou_threshold']),
-        EditScore(rank, world_size, args.arch['num_classes']),
-        ConfusionMatrix(rank, world_size, args.arch['num_classes'])]
+        F1Score(metric_rank, metric_world_size, args.arch['num_classes'], args.processor['iou_threshold']),
+        EditScore(metric_rank, metric_world_size, args.arch['num_classes']),
+        ConfusionMatrix(metric_rank, metric_world_size, args.arch['num_classes'])]
 
     # construct a processing wrapper
     processor = Processor(rank, world_size, model, loss, statistics, segment_generator, metrics)
@@ -78,7 +80,7 @@ def train(rank, world_size, args):
         optim_conf=args.optimizer,
         job_conf=args.job)
 
-    if rank == 0 or not torch.cuda.is_available():
+    if rank == 0 or not torch.cuda.is_available() or not args.processor['is_ddp']:
         # copy over resulting files of interest into the $VSC_DATA persistent storage
         if args.processor.get('backup'):
             for f in [
@@ -99,7 +101,7 @@ def train(rank, world_size, args):
                 args.job['email']))
 
     # perform common cleanup
-    cleanup()
+    cleanup(args)
 
     return None
 
@@ -139,7 +141,7 @@ def test(rank, world_size, args):
         proc_conf=args.processor,
         job_conf=args.job)
 
-    if rank == 0 or not torch.cuda.is_available():
+    if rank == 0 or not torch.cuda.is_available() or not args.processor['is_ddp']:
         # copy over resulting files of interest into the $VSC_DATA persistent storage
         if args.processor.get('backup'):
             for f in [
@@ -157,7 +159,7 @@ def test(rank, world_size, args):
                 args.job['email']))
 
     # perform common cleanup
-    cleanup()
+    cleanup(args)
 
     return None
 
@@ -205,7 +207,7 @@ def benchmark(rank, world_size, args):
         arch_conf=args.arch,
         job_conf=args.job)
 
-    if rank == 0 or not torch.cuda.is_available():
+    if rank == 0 or not torch.cuda.is_available() or not args.processor['is_ddp']:
         if args.processor.get('backup'):
             for f in [
                 'accuracy.csv',
@@ -227,7 +229,7 @@ def benchmark(rank, world_size, args):
                 args.job['email']))
 
     # perform common cleanup
-    cleanup()
+    cleanup(args)
 
     return None
 
@@ -245,9 +247,10 @@ def main(args):
     torch.backends.cudnn.deterministic = True
 
     # enter the appropriate command
+
     # will use all available GPUs for DistributedDataParallel model and spawn K processes, 1 for each GPU
     # otherwise will run as a CPU model
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and args.processor['is_ddp']:
         world_size = torch.cuda.device_count()
         mp.spawn(args.func, args=(world_size, args), nprocs=world_size)
     else:

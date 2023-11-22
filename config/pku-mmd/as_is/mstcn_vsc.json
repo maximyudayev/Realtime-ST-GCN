@@ -8,15 +8,16 @@
         "actions": "/data/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1/actions.txt",
         "graph": "/data/leuven/341/vsc34153/rt-st-gcn/data/skeletons/pku-mmd.json",
         "demo": [175,293,37],
-        "iou_threshold": [0.1,0.25,0.5]
+        "iou_threshold": [0.1,0.25,0.5],
+        "is_ddp": true
     },
     "arch": {
         "strategy": "spatial",
-        "segment": 10000,
+        "segment": 5000,
         "in_feat": 3,
         "stages": 4,
-        "refine": "probability",
-        "probability": "logsoftmax",
+        "refine": "softmax",
+        "output_type": "logits",
         "ms-tcn": {
             "latency": false,
             "importance": true,
@@ -44,7 +45,7 @@
             90,91,92,93,94,95,96,97,98],
         "learning_rate": 0.0005,
         "learning_rate_decay": 1.0,
-        "batch_size": 128
+        "batch_size": 16
     },
     "job": {
         "email": "maxim.yudayev@kuleuven.be",

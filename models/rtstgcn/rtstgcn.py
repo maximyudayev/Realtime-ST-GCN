@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.quantized as nnq
 import torch.nn.functional as F
-from models.utils import Graph
+from models.utils import Graph, LayerNorm
 from torch.ao.quantization import QuantStub, DeQuantStub
 
 
@@ -98,35 +98,30 @@ class Model(nn.Module):
 
         # input capture normalization
         # (N,C,L,V)
-        self.is_bn = kwargs['is_bn']
-
-        if self.is_bn:
-            self.data_bn = nn.BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=kwargs['is_bn_stats'])
+        self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)])
 
         # fcn for feature remapping of input to the network size
-        self.fcn_in = nn.Conv2d(in_channels=self.conf['in_feat'], out_channels=self.conf['in_ch'][0][0], kernel_size=1)
+        self.fcn_in = nn.Conv2d(in_channels=self.conf['in_feat'], out_channels=self.conf['in_ch'][0], kernel_size=1)
 
         # stack of ST-GCN layers
-        stack = [[OfflineLayer(
-                    num_joints=kwargs['graph']['num_node'],
-                    in_channels=self.conf['in_ch'][i][j],
-                    out_channels=self.conf['out_ch'][i][j],
-                    kernel_size=self.conf['kernel'][i],
-                    stride=self.conf['stride'][i][j],
-                    num_partitions=self.A.shape[0],
-                    residual=not not self.conf['residual'][i][j],
-                    dropout=self.conf['dropout'][i][j],
-                    importance=self.conf['importance'],
-                    graph=self.A,
-                    segment=kwargs["segment"],
-                    rank=rank,
-                    is_bn=kwargs['is_bn'],
-                    track_running_stats=kwargs.get('is_bn_stats'))
-                for j in range(layers_in_stage)]
-                for i, layers_in_stage in enumerate(self.conf['layers'])]
+        stack = [
+            OfflineLayer(
+                num_joints=kwargs['graph']['num_node'],
+                in_channels=self.conf['in_ch'][i],
+                out_channels=self.conf['out_ch'][i],
+                kernel_size=self.conf['kernel'],
+                stride=self.conf['stride'][i],
+                num_partitions=self.A.shape[0],
+                residual=not not self.conf['residual'][i],
+                dropout=self.conf['dropout'][i],
+                importance=self.conf['importance'],
+                graph=self.A,
+                segment=kwargs["segment"],
+                rank=rank)
+            for i in range(self.conf['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
-        self.st_gcn = nn.Sequential(*[module for sublist in stack for module in sublist])
+        self.st_gcn = nn.Sequential(*stack)
 
         # global pooling
         # converts (N,C,L,V) -> (N,C,L,1)
@@ -135,7 +130,7 @@ class Model(nn.Module):
         # fcn for prediction
         # maps C to num_classes channels: (N,C,L,1) -> (N,F,L,1)
         self.fcn_out = nn.Conv2d(
-            in_channels=self.conf['out_ch'][-1][-1],
+            in_channels=self.conf['out_ch'][-1],
             out_channels=kwargs['num_classes'],
             kernel_size=1)
 
@@ -144,18 +139,8 @@ class Model(nn.Module):
 
 
     def forward(self, x):
-        if self.is_bn:
-            # data normalization
-            N, C, T, V = x.size()
-            # permutes must copy the tensor over as contiguous because .view() needs a contiguous tensor
-            # this incures extra overhead
-            x = x.permute(0, 3, 1, 2).contiguous()
-            # (N,V,C,T)
-            x = x.view(N, V * C, T)
-            x = self.data_bn(x)
-            x = x.view(N, V, C, T)
-            x = x.permute(0, 2, 3, 1)
-            # (N,C,T,V)
+        # data normalization
+        x = self.norm_in(x)
 
         # remap the features to the network size
         x = self.fcn_in(x)
@@ -176,25 +161,24 @@ class Model(nn.Module):
 
 
     def _swap_layers_for_inference(self):
-        # TODO: update logic
         # stack of ST-GCN layers
-        stack = [[OnlineLayer(
-                    num_joints=self.A.shape[-1],
-                    fifo_latency=self.conf['latency'],
-                    in_channels=self.conf['in_ch'][i][j],
-                    out_channels=self.conf['out_ch'][i][j],
-                    kernel_size=self.conf['kernel'][i],
-                    stride=self.conf['stride'][i][j],
-                    num_partitions=self.A.shape[0],
-                    residual=not not self.conf['residual'][i][j],
-                    dropout=self.conf['dropout'][i][j],
-                    importance=self.conf['importance'],
-                    graph=self.A)
-                for j in range(layers_in_stage)]
-                for i, layers_in_stage in enumerate(self.conf['layers'])]
+        stack = [
+            OnlineLayer(
+                num_joints=self.A.shape[-1],
+                fifo_latency=self.conf['latency'],
+                in_channels=self.conf['in_ch'][i],
+                out_channels=self.conf['out_ch'][i],
+                kernel_size=self.conf['kernel'],
+                stride=self.conf['stride'][i],
+                num_partitions=self.A.shape[0],
+                residual=not not self.conf['residual'][i],
+                dropout=self.conf['dropout'][i],
+                importance=self.conf['importance'],
+                graph=self.A)
+            for i in range(self.conf['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
-        new_st_gcn = nn.Sequential(*[module for sublist in stack for module in sublist])
+        new_st_gcn = nn.Sequential(*stack)
 
         # copy parameters from the batch trained model into the RT version
         # user must ensure that all necessary updates are made on conversion between the two different architectures
@@ -275,9 +259,7 @@ class OfflineLayer(nn.Module):
         importance,
         graph,
         segment,
-        rank,
-        is_bn=True,
-        track_running_stats=True):
+        rank):
         """
         Args:
             in_channels : ``int``
@@ -342,12 +324,9 @@ class OfflineLayer(nn.Module):
         self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1)
 
         # normalization and dropout on main branch
-        if is_bn:
-            self.bn_relu = nn.Sequential(
-                nn.BatchNorm2d(out_channels, track_running_stats=track_running_stats),
-                nn.ReLU())
-        else:
-            self.bn_relu = nn.Sequential(nn.ReLU())
+        self.bn_relu = nn.Sequential(
+            LayerNorm([out_channels, 1, num_joints]),
+            nn.ReLU())
 
         # residual branch
         if not residual:
@@ -355,13 +334,9 @@ class OfflineLayer(nn.Module):
         elif (in_channels == out_channels) and (stride == 1):
             self.residual = lambda x: x
         else:
-            if is_bn:
-                self.residual = nn.Sequential(
-                    nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
-                    nn.BatchNorm2d(out_channels, track_running_stats=False))
-            else:
-                self.residual = nn.Sequential(
-                    nn.Conv2d(in_channels, out_channels, kernel_size=1))
+            self.residual = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+                LayerNorm([out_channels, 1, num_joints]))
 
         # activation of branch sum
         # if no resnet connection, prevent ReLU from being applied twice
@@ -450,9 +425,10 @@ class OnlineLayer(nn.Module):
         num_partitions,
         dropout,
         residual,
-        fifo_latency,
         importance,
-        graph):
+        graph,
+        segment,
+        rank):
         """
         Args:
             in_channels : ``int``
@@ -515,15 +491,14 @@ class OnlineLayer(nn.Module):
 
         # normalization and dropout on main branch
         self.bn_relu = nn.Sequential(
-            # nn.BatchNorm2d(out_channels, track_running_stats=True),
+            LayerNorm([out_channels, 1, num_joints]),
             nn.ReLU())
 
         # residual branch
         if residual and not ((in_channels == out_channels) and (stride == 1)):
             self.residual = nn.Sequential(
-                # nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
-                nn.Conv2d(in_channels, out_channels, kernel_size=1),
-                # nn.BatchNorm2d(out_channels, track_running_stats=True)
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+                LayerNorm([out_channels, 1, num_joints]),
             )
         else:
             self.residual = nn.Identity()
