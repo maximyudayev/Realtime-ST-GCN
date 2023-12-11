@@ -319,6 +319,19 @@ The expected **Top-1** **accuracy** of provided models are shown here:
 [1] Kim, T. S., and Reiter, A. 2017. Interpretable 3d human action analysis with temporal convolutional networks. In BNMW CVPRW. 
 --> 
 
+## Commit Conventions
+Used commit convention: `Type(scope): message`.
+
+Commit types:
+1. **Fix** - bug fixes.
+2. **Feat** - adding features.
+3. **Refactor** - code structure improvement w/o functionality changes.
+4. **Perf** - performance improvement.
+5. **Test** - adding or updating tests.
+6. **Build** - infrastructure, hosting, deployment related changes.
+7. **Docs** - documentation and related changes.
+8. **Chore** - miscallenous or what does not impact user.
+
 ## Citation
 Please cite the following paper if you use this repository in your reseach.
 ```

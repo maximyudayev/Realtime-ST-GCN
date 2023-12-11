@@ -22,7 +22,7 @@ class BufferSegment(Segment):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # temporal kernel size
-        self.G = kwargs['kernel'][0]
+        self.G = kwargs['kernel']
 
     def pad_sequence(self, L):
         # no start padding needed for our RT model because elements are summed internally with a Toeplitz matrix to mimic FIFO behavior
