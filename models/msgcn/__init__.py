@@ -1,0 +1,1 @@
+from .msgcn import Model

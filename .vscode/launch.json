@@ -2,186 +2,16 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Train Original",
+            "name": "PKU-MMDv1 Train",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
                 "train",
-                "--batch_size",
-                "64",
-                "--kernel",
-                "9",
-                "--receptive_field",
-                "300",
-                "--segment",
-                "1000",
-                // "--checkpoint",
-                // "pretrained_models/pku-mmd/original/train_9_50_64_50_24-02-23_02:04:57/epoch-49.pt",
                 "--config",
-                "config/pku-mmd/original_vsc.json"
-            ],
-        },
-        {
-            "name": "Train Adapted",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                "train",
-                "--checkpoint",
-                "pretrained_models/pku-mmd/adapted/run_51339647/final.pt",
-                "--config",
-                "config/pku-mmd/adapted_local.json",
-            ],
-        },
-        {
-            "name": "Train Realtime",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                "train",
-                "--batch_size",
-                "64",
-                "--epochs",
-                "1",
-                "--data",
-                "data/pku-mmdv1-subset",
-                // "--checkpoint",
-                // "pretrained_models/pku-mmd/realtime/train_9_64_50_23-02-23_22:55:53/epoch-49.pt",
-                "--config",
-                "config/pku-mmd/realtime_local.json",
-            ],
-        },
-        {
-            "name": "Test Original",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                "test",
-                "--kernel",
-                "9",
-                "--receptive_field",
-                "50",
-                "--checkpoint",
-                "pretrained_models/pku-mmd/original/train_9_50_32_50_10-02-23_00:27:56/final.pt",
-                "--config",
-                "config/pku-mmd/original_local.json"
-            ],
-        },
-        {
-            "name": "Test Adapted",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                // "test",
-                // "--checkpoint",
-                // "pretrained_models/pku-mmd/adapted/run_225/epoch-8.pt",
-                "--config",
-                "config/pku-mmd/adapted_local.json"
-            ],
-        },
-        {
-            "name": "Test Realtime",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                "test",
-                "--kernel",
-                "9",
-                // "--checkpoint",
-                // "pretrained_models/pku-mmdv1/realtime/train_9_64_50_13-03-23_15:40:04/final.pt",
-                "--config",
-                "config/pku-mmd/realtime_local.json"
-            ],
-        },
-        {
-            "name": "Benchmark Original",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                "benchmark",
-                "--kernel",
-                "9",
-                "--receptive_field",
-                "50",
-                // "--checkpoint",
-                // "pretrained_models/pku-mmd/original/run_51342637/epoch-0.pt",
-                "--config",
-                "config/pku-mmd/original_local.json"
-            ],
-        },
-        {
-            "name": "Benchmark Realtime",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                "benchmark",
-                "--kernel",
-                "9",
-                "--backend",
-                "x86",
-                // "--checkpoint",
-                // "pretrained_models/pku-mmdv1/realtime/train_9_64_50/final.pt",
-                "--config",
-                "config/pku-mmd/realtime_local.json"
-            ],
-        },
-        {
-            "name": "VSC: Train Realtime",
-            "type": "python",
-            "request": "launch",
-            "preLaunchTask": "Load Modules",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                "train",
-                "--epochs",
-                "20",
-                "--batch_size",
-                "32",
-                "--data",
-                "/scratch/leuven/341/vsc34153/rt_st_gcn/data/pku-mmd-xsubject",
-                "--out",
-                "/scratch/leuven/341/vsc34153/rt_st_gcn/pretrained_models/pku-mmd-xsubject",
-                "--config",
-                "/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json"
-            ],
-        },
-        {
-            "name": "VSC: Train Proposed",
-            "type": "python",
-            "request": "launch",
-            "preLaunchTask": "Load Modules",
-            "program": "${workspaceFolder}/main.py",
-            "console": "integratedTerminal",
-            "args": [
-                "train",
-                "--epochs",
-                "20", 
-                "--batch_size", 
-                "32", 
-                "--data", 
-                "/scratch/leuven/341/vsc34153/rt_st_gcn/data/pku-mmd-xsubject", 
-                "--out", 
-                "/scratch/leuven/341/vsc34153/rt_st_gcn/pretrained_models/pku-mmd-xsubject", 
-                "--config",
-                "/data/leuven/341/vsc34153/rt-st-gcn/config/pku-mmd/realtime_vsc.json"
-            ],
+                "config/pku-mmd/as_is/mstcn_local.json",
+            ]
         },
         {
             "name": "Debug Current File",
@@ -189,9 +19,7 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "args": [
-                "data/pku-mmdv1/train/features"
-            ]
+            "args": []
         }
     ]
 }

@@ -1,96 +1,17 @@
 import torch
-from torch.utils.data import DataLoader
-from data_prep.dataset import SkeletonDataset, SkeletonDatasetFromDirectory
-from models.proposed.st_gcn import Stgcn
-from models.proposed.st_gcn import AggregateStgcn, ObservedAggregateStgcn, QAggregateStgcn
-from models.adapted.st_gcn import Model as AdaptedStgcn
-from models.original.st_gcn import Model as OriginalStgcn
-from processor import Processor
-import st_gcn_parser
-import argparse
+
+from processor import Processor, setup, cleanup
+from models import MODELS
+from utils import LOSS, SEGMENT_GENERATOR, STATISTICS
+from utils import Parser
+from utils.metrics import F1Score, EditScore, ConfusionMatrix
+
 import os
-import sys
 import random
-import time
-import json
-from datetime import datetime
 
 
-def common(args):
-    """Performs setup common to any ST-GCN model variant.
-
-    Only needs to be invoked once for a given problem (train-test, benchmark, etc.). 
-    Corresponds to the parts of the pipeline irrespective of the black-box model used.
-    Creates DataLoaders, sets up processing device and random number generator,
-    reads action classes file.
-
-    Args:
-        args : ``dict``
-            Parsed CLI arguments.
-
-    Returns:
-        Dictionary of action classes.
-
-        PyTorch device (CPU or GPU).
-
-        Train and validation DataLoaders.
-    """
-
-    # setting up random number generator for deterministic and meaningful benchmarking
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = True
-
-    # preparing datasets for training and validation
-    if args.dataset_type == 'file':
-        train_data = SkeletonDataset('{0}/train_data.npy'.format(args.data), '{0}/train_label.pkl'.format(args.data))
-        val_data = SkeletonDataset('{0}/val_data.npy'.format(args.data), '{0}/val_label.pkl'.format(args.data))
-    elif args.dataset_type == 'dir':
-        train_data = SkeletonDatasetFromDirectory('{0}/train/features'.format(args.data), '{0}/train/labels'.format(args.data))
-        val_data = SkeletonDatasetFromDirectory('{0}/val/features'.format(args.data), '{0}/val/labels'.format(args.data))
-
-    # trials of different length can not be placed in the same tensor when batching, have to manually iterate over them
-    batch_size = 1 if args.dataset_type == 'dir' else args.batch_size
-
-    train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-    val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
-
-    # extract skeleton graph data
-    with open(args.graph, 'r') as graph_file:
-        graph = json.load(graph_file)
-
-    # extract actions from the label file
-    with open(args.actions, 'r') as action_names:
-        actions = action_names.read().split('\n')
-
-    # 0th class is always background action
-    actions_dict = {0: "background"}
-    for i, action in enumerate(actions):
-        actions_dict[i+1] = action
-
-    jobname = [args.command, str(args.kernel[0])]
-    if args.model == 'original':
-        jobname += [str(args.receptive_field)]
-    if args.command == 'train':
-        jobname += [str(args.batch_size), str(args.epochs)]
-
-    # prepare a directory to store results
-    save_dir = "{0}/{1}/{2}_{3}".format(
-        args.out,
-        args.model + ('_red' if args.model == 'original' and args.latency else ''), 
-        '_'.join(jobname),
-        datetime.now().strftime('%d-%m-%y_%H:%M:%S'))
-
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-
-    return graph, actions_dict, device, train_dataloader, val_dataloader, save_dir, jobname
-
-
-def build_model(args):
-    """Builds the selected ST-GCN model variant.
+def pick_model(args):
+    """Returns a constructor for the selected model variant.
 
     Args:
         args : ``dict``
@@ -98,996 +19,302 @@ def build_model(args):
 
     Returns:
         PyTorch Model corresponding to the user-defined CLI parameters.
-
-    Raises:
-        ValueError:
-            If GCN parameter list sizes do not match the number of stages.
     """
 
-    if (len(args.in_ch) != args.stages or
-        len(args.out_ch) != args.stages or
-        len(args.stride) != args.stages or
-        len(args.residual) != args.stages):
+    return \
+        MODELS[args.processor['model']], \
+        LOSS[args.processor['model']], \
+        SEGMENT_GENERATOR[args.processor['model']], \
+        STATISTICS[args.processor['model']]
+
+
+def assert_parameters(args):
+    """Performs model and job configuration parameter checks."""
+
+    # do some desired parameter checking
+    if (False):
         raise ValueError(
             'GCN parameter list sizes do not match the number of stages. '
             'Check your config file.')
-    elif (args.model == 'realtime' and args.buffer != 1):
-        raise ValueError(
-            'Selected the realtime model, but set buffer size to 1. '
-            'Check your config file.')
-
-    if args.model == 'original':
-        model = OriginalStgcn(**vars(args))
-    elif args.model == 'adapted':
-        model = AdaptedStgcn(**vars(args))
-    else:
-        # all 3 adapted versions are encapsulated in the same class, training is identical (batch mode),
-        # usecase changes applied during inference
-        model = Stgcn(**vars(args))
-
-    return model
+    return None
 
 
-def train(args):
-    """Entry point for training functionality of a single selected model.
+def train(rank, world_size, args):
+    """Entry point for training a single selected model.
 
     Args:
+        rank :
+            Local GPU index.
+
+        world_size :
+            Number of used GPUs.
+
         args : ``dict``
             Parsed CLI arguments.
     """
 
-    # perform common setup around the model's black box
-    args.graph, actions, device, train_dataloader, val_dataloader, save_dir, args.jobname = common(args)
-    args.num_classes = len(actions)
+    # return reference to the user selected model constructor
+    Model, Loss, SegmentGenerator, Statistics = pick_model(args)
 
-    # construct the target model using the CLI arguments
-    model = build_model(args)
-    # load the checkpoint if not trained from scratch
-    if args.checkpoint:
-        # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
-        model.load_state_dict({
-            k.split('module.')[1]: v 
-            for k, v in
-            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+    # perform common setup around the model's black box
+    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args)
+
+    # list metrics that Processor should record
+    metrics = [
+        F1Score(rank, args.arch['num_classes'], args.processor['iou_threshold']),
+        EditScore(rank, args.arch['num_classes']),
+        ConfusionMatrix(rank, args.arch['num_classes'])]
 
     # construct a processing wrapper
-    trainer = Processor(model, args.num_classes, train_dataloader, device)
-
-    start_time = time.time()
-
-    # last dimension is the number of subjects in the scene (2 for datasets used)
-    print("Training started", flush=True, file=args.log[0])
+    processor = Processor(rank, world_size, model, loss, statistics, segment_generator, metrics)
 
     # perform the training
     # (the model is trained on all skeletons in the scene, simultaneously)
-    trainer.train(
-        save_dir=save_dir,
+    processor.train(
         train_dataloader=train_dataloader,
         val_dataloader=val_dataloader,
-        device=device,
-        **vars(args))
+        proc_conf=args.processor,
+        optim_conf=args.optimizer,
+        job_conf=args.job)
 
-    print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
+    if rank == 0 or not torch.cuda.is_available() or not args.processor['is_ddp']:
+        # copy over resulting files of interest into the $VSC_DATA persistent storage
+        if args.processor.get('backup'):
+            for f in [
+                'accuracy-curve.csv',
+                'train-validation-curve.csv',
+                'final.pt',
+                'macro-F1@k.csv',
+                'accuracy.csv',
+                'edit.csv',
+                'confusion-matrix.csv',
+                *['segmentation-{0}.csv'.format(i) for i in args.processor['demo']]]:
+                os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
 
-    # copy over resulting files of interest into the $VSC_DATA persistent storage
-    if args.backup:
-        backup_dir = "{0}/{1}".format(
-            args.backup,
-            '/'.join(save_dir.split('/')[-2:]))
+        os.system(
+            'mail -s "[{0}]: COMPLETED" {1} <<< ""'
+            .format(
+                args.job['jobname'],
+                args.job['email']))
 
-        if not os.path.exists(backup_dir):
-            os.makedirs(backup_dir)
+    # perform common cleanup
+    cleanup(args)
 
-        for f in [
-            'accuracy-curve.csv',
-            'train-validation-curve.csv',
-            'final.pt',
-            'macro-F1@k.csv',
-            'accuracy.csv',
-            'edit.csv',
-            'confusion-matrix.csv',
-            'segmentation-175.csv',
-            'segmentation-293.csv',
-            'segmentation-37.csv']:
-            os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
-
-    os.system(
-        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
-        .format(
-            '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
-            args.email))
-
-    return
+    return None
 
 
-def test(args):
-    """Entry point for testing functionality of a single pretrained model.
+def test(rank, world_size, args):
+    """Entry point for testing performance of a single pretrained model.
 
     Args:
+        rank :
+            Local GPU index.
+
+        world_size :
+            Number of used GPUs.
+
         args : ``dict``
             Parsed CLI arguments.
     """
 
-    # perform common setup around the model's black box
-    args.graph, actions, device, _, val_dataloader, save_dir, args.jobname = common(args)
-    args.num_classes = len(actions)
+    # return reference to the user selected model constructor
+    Model, Loss, SegmentGenerator, Statistics = pick_model(args)
 
-    # construct the target model using the CLI arguments
-    model = build_model(args)
-    # load the checkpoint if not trained from scratch
-    if args.checkpoint:
-        # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
-        model.load_state_dict({
-            k.split('module.')[1]: v 
-            for k, v in
-            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+    # perform common setup around the model's black box
+    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args)
+
+    # list metrics that Processor should record
+    metrics = [
+        F1Score(rank, args.arch['num_classes'], args.processor['iou_threshold']),
+        EditScore(rank, args.arch['num_classes']),
+        ConfusionMatrix(rank, args.arch['num_classes'])]
 
     # construct a processing wrapper
-    trainer = Processor(model, args.num_classes, val_dataloader, device)
-
-    start_time = time.time()
-
-    # last dimension is the number of subjects in the scene (2 for datasets used)
-    print("Testing started", flush=True, file=args.log[0])
+    processor = Processor(rank, world_size, model, loss, statistics, segment_generator, metrics)
 
     # perform the testing
-    trainer.test(save_dir, val_dataloader, device, **vars(args))
+    processor.test(
+        dataloader=val_dataloader,
+        proc_conf=args.processor,
+        job_conf=args.job)
 
-    print("Testing completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
+    if rank == 0 or not torch.cuda.is_available() or not args.processor['is_ddp']:
+        # copy over resulting files of interest into the $VSC_DATA persistent storage
+        if args.processor.get('backup'):
+            for f in [
+                'macro-F1@k.csv',
+                'accuracy.csv',
+                'edit.csv',
+                'confusion-matrix.csv',
+                *['segmentation-{0}.csv'.format(i) for i in args.processor['demo']]]:
+                os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
 
-    # copy over resulting files of interest into the $VSC_DATA persistent storage
-    if args.backup:
-        backup_dir = "{0}/{1}".format(
-            args.backup,
-            '/'.join(save_dir.split('/')[-2:]))
+        os.system(
+            'mail -s "[{0}]: COMPLETED" {1} <<< ""'
+            .format(
+                args.job['jobname'],
+                args.job['email']))
 
-        if not os.path.exists(backup_dir):
-            os.makedirs(backup_dir)
+    # perform common cleanup
+    cleanup(args)
 
-        for f in [
-            'macro-F1@k.csv',
-            'accuracy.csv',
-            'edit.csv',
-            'confusion-matrix.csv',
-            'segmentation-175.csv',
-            'segmentation-293.csv',
-            'segmentation-37.csv']:
-            os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
-
-    os.system(
-        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
-        .format(
-            '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
-            args.email))
-
-    return
+    return None
 
 
-def benchmark(args):
-    """Entry point for benchmarking inference of a model.
+def benchmark(rank, world_size, args):
+    """Entry point for benchmarking inference of a model, including quantization.
+
+    TODO: add custom quantization conversion modules for other models
 
     Args:
+        rank :
+            Local GPU index.
+
+        world_size :
+            Number of used GPUs.
+
         args : ``dict``
             Parsed CLI arguments.
     """
 
-    # perform common setup around the model's black box
-    # TODO: add entries for original ST-GCN modules
-    args.graph, actions, device, _, val_dataloader, save_dir, args.jobname = common(args)
-    args.num_classes = len(actions)
-    args.prepare_dict = {
-        "float_to_observed_custom_module_class": {
-            "static": {
-                AggregateStgcn: ObservedAggregateStgcn,
-            }
-        }
-    }
-    args.convert_dict = {
-        "observed_to_quantized_custom_module_class": {
-            "static": {
-                ObservedAggregateStgcn: QAggregateStgcn,
-            }
-        }
-    }
+    # return reference to the user selected model constructor
+    Model, Loss, SegmentGenerator, Statistics = pick_model(args)
 
-    # construct the target model using the CLI arguments
-    model = build_model(args)
-    # load the checkpoint if not trained from scratch
-    if args.checkpoint:
-        # model.load_state_dict(torch.load(args.checkpoint, map_location=device)['model_state_dict'])
-        model.load_state_dict({
-            (k.split('module.')[1] if k.split('.')[1] != 'edge_importance' else 'st_gcn.{0}.edge_importance'.format(k.split('.')[2])): v
-            for k, v in
-            torch.load(args.checkpoint, map_location=device)['model_state_dict'].items()})
+    # perform common setup around the model's black box
+    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args)
+
+    # get custom quantization details if the model needs any
+    # maps custom quantization replacement modules
+    args.arch.prepare_dict = model.prepare_dict()
+    args.arch.convert_dict = model.convert_dict()
+
+    # list metrics that Processor should record
+    metrics = [
+        F1Score(rank, args.arch['num_classes'], args.processor['iou_threshold']),
+        EditScore(rank, args.arch['num_classes']),
+        ConfusionMatrix(rank, args.arch['num_classes'])]
 
     # construct a processing wrapper
-    trainer = Processor(model, args.num_classes, val_dataloader, device)
-
-    start_time = time.time()
-
-    # last dimension is the number of subjects in the scene (2 for datasets used)
-    print("Benchmarking started", flush=True, file=args.log[0])
+    processor = Processor(rank, world_size, model, loss, statistics, segment_generator, metrics)
 
     # perform the testing
-    trainer.benchmark(save_dir, val_dataloader, device, **vars(args))
+    processor.benchmark(
+        dataloader=val_dataloader,
+        proc_conf=args.processor,
+        arch_conf=args.arch,
+        job_conf=args.job)
 
-    print("Benchmarking completed in: {0}".format(time.time() - start_time), flush=True, file=args.log[0])
+    if rank == 0 or not torch.cuda.is_available() or not args.processor['is_ddp']:
+        if args.processor.get('backup'):
+            for f in [
+                'accuracy.csv',
+                'loss.csv',
+                'macro-F1@k.csv',
+                'edit.csv',
+                'latency.csv',
+                'model-size.csv',
+                'confusion-matrix_fp32.csv',
+                'confusion-matrix_int8.csv',
+                *['segmentation-{0}_fp32.csv'.format(i) for i in args.processor['demo']],
+                *['segmentation-{0}_int8.csv'.format(i) for i in args.processor['demo']]]:
+                os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
 
-    if args.backup:
-        backup_dir = "{0}/{1}".format(
-            args.backup,
-            '/'.join(save_dir.split('/')[-2:]))
+        os.system(
+            'mail -s "[{0}]: COMPLETED" {1} <<< ""'
+            .format(
+                args.job['jobname'],
+                args.job['email']))
 
-        if not os.path.exists(backup_dir):
-            os.makedirs(backup_dir)
+    # perform common cleanup
+    cleanup(args)
 
-        for f in [
-            'accuracy.csv',
-            'loss.csv',
-            'macro-F1@k.csv',
-            'edit.csv',
-            'latency.csv',
-            'model-size.csv',
-            'confusion-matrix_fp32.csv',
-            'confusion-matrix_int8.csv',
-            'segmentation-175_fp32.csv',
-            'segmentation-293_fp32.csv',
-            'segmentation-37_fp32.csv',
-            'segmentation-175_int8.csv',
-            'segmentation-293_int8.csv',
-            'segmentation-37_int8.csv']:
-            os.system('cp {0}/{1} {2}'.format(save_dir, f, backup_dir))
+    return None
 
-    os.system(
-        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
-        .format(
-            '_'.join([args.model, 'red' if args.model == 'original' and args.latency else '', *args.jobname]),
-            args.email))
 
-    return
+def main(args):
+    """Entrypoint into the script that routes to the correct function."""
+
+    # check user inputs using user logic
+    assert_parameters(args)
+
+    # setting up random number generator for deterministic and meaningful benchmarking
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    world_size = torch.cuda.device_count()
+    random.seed(args.optimizer['seed'])
+    torch.manual_seed(args.optimizer['seed'])
+    torch.cuda.manual_seed_all(args.optimizer['seed'])
+    torch.backends.cudnn.deterministic = True
+
+    # enter the appropriate command
+    args.func(device, (1 if world_size in [None, 0] else world_size), args)
+
+    return None
 
 
 if __name__ == '__main__':
-    # top-level custom CLI parser
-    # TODO: add `required` parameters to sub-parsers, where needed
-    parser = st_gcn_parser.Parser(
+    # top-level custom CLI parser -> 
+    parser = Parser(
         prog='main',
-        description='Script for human action segmentation processing using ST-GCN networks.',
-        epilog='TODO: add the epilog')
+        description="""Script for continual human action recognition model processing.
+            \nSupports: {{{0}}}""".format('|'.join(MODELS.keys())),
+        epilog='Maxim Yudayev (maxim.yudayev@kuleuven.be)')
 
     subparsers= parser.add_subparsers(
         title='commands',
         dest='command',
         required=True)
 
-    # train command parser (must manually update usage after changes
-    # to the argument list or provide a custom formatter)
+    # train command parser
     parser_train = subparsers.add_parser(
         'train',
         usage="""%(prog)s [-h]
-            \r\t[--config FILE]
-            \r\t[--model MODEL {realtime|buffer_realtime|batch|original}]
-            \r\t[--strategy STRATEGY {uniform|distance|spatial}]
-            \r\t[--in_feat IN_FEAT]
-            \r\t[--stages STAGES]
-            \r\t[--buffer BUFFER]
-            \r\t[--kernel [KERNEL]]
-            \r\t[--segment SEGMENT]
-            \r\t[--importance]
-            \r\t[--latency]
-            \r\t[--receptive_field FIELD]
-            \r\t[--layers [LAYERS]]
-            \r\t[--in_ch [IN_CH,[...]]]
-            \r\t[--out_ch [OUT_CH,[...]]]
-            \r\t[--stride [STRIDE,[...]]]
-            \r\t[--residual [RESIDUAL,[...]]]
-            \r\t[--dropout [DROPOUT,[...]]]
-            \r\t[--iou_threshold [THRESHOLDS]]
-            \r\t[--graph FILE]
-
-            \r\t[--seed SEED]
-            \r\t[--epochs EPOCHS]
-            \r\t[--checkpoints [CHECKPOINTS]]
-            \r\t[--learning_rate RATE]
-            \r\t[--learning_rate_decay RATE_DECAY]
-            \r\t[--batch_size BATCH]
-
-            \r\t[--data DATA_DIR]
-            \r\t[--dataset_type TYPE]
-            \r\t[--actions FILE]
-            \r\t[--out OUT_DIR]
-            \r\t[--backup BACKUP_DIR]
-            \r\t[--checkpoint CHECKPOINT]
-            \r\t[--log O_FILE E_FILE]
-            \r\t[--email EMAIL]
-            \r\t[-v[vv]]""",
-        help='train target ST-GCN network',
-        epilog='TODO: add the epilog')
-
-    parser_train_model = parser_train.add_argument_group(
-        'model',
-        'arguments for configuring the ST-GCN model. '
-        'If an argument is not provided, defaults to value inside config file. '
-        'User can provide own config JSON file using --config argument, '
-        'but it is the user\'s responsibility to provide all needed parameters')
-    parser_train_optim = parser_train.add_argument_group(
-        'optimizer',
-        'arguments for configuring training')
-    parser_train_io = parser_train.add_argument_group(
-        'IO',
-        'all miscallenous IO, log, file and path arguments')
-
-    # model arguments
-    parser_train_model.add_argument(
+            \r\t[--config FILE]""",
+        help='train target continual HAR network',
+        epilog='Maxim Yudayev (maxim.yudayev@kuleuven.be)')
+    parser_train.add_argument(
         '--config',
         type=str,
-        default='config/pku-mmd/realtime_local.json',
+        default='config/pku-mmd/stgcn_local.json',
         metavar='',
         help='path to the NN config file. Must be the last argument if combined '
             'with other CLI arguments. Provides default values for all arguments, except --log '
-            '(default: config/pku-mmd/realtime_local.json)')
-    parser_train_model.add_argument(
-        '--model',
-        choices=['realtime','buffer_realtime','batch','original'],
-        metavar='',
-        help='type of NN model to use (default: realtime)')
-    parser_train_model.add_argument(
-        '--strategy',
-        choices=['uniform','distance','spatial'],
-        metavar='',
-        help='type of graph partitioning strategy to use (default: spatial)')
-    parser_train_model.add_argument(
-        '--in_feat',
-        type=int,
-        metavar='',
-        help='number of features/channels in data samples (default: 3)')
-    parser_train_model.add_argument(
-        '--stages',
-        type=int,
-        metavar='',
-        help='number of ST-GCN stages to stack (default: 1)')
-    parser_train_model.add_argument(
-        '--buffer',
-        type=int,
-        metavar='',
-        help='number of frames to buffer before batch processing. '
-            'Applied only when --model=buffer_realtime (default: 1)')
-    parser_train_model.add_argument(
-        '--kernel',
-        type=int,
-        nargs='+',
-        metavar='',
-        help='list of temporal kernel sizes (Gamma) per stage (default: [9])')
-    parser_train_model.add_argument(
-        '--segment',
-        type=int,
-        metavar='',
-        help='size of overlapping segments of frames to divide a trial into for '
-            'parallelizing computation (creates a new batch dimension). '
-            'Currently only supports datasets with different length trials. '
-            'Applied only when --model != original and --dataset_type=dir (default: 100)')
-    parser_train_model.add_argument(
-        '--importance',
-        default=True,
-        action='store_true',
-        help='flag specifying whether ST-GCN layers have edge importance weighting '
-            '(default: True)')
-    parser_train_model.add_argument(
-        '--latency',
-        default=False,
-        action='store_true',
-        help='flag specifying whether ST-GCN layers have half-buffer latency when --model!=original, '
-            'or non-overlapping receptive field window when --model=original (default: False)')
-    parser_train_model.add_argument(
-        '--receptive_field',
-        type=int,
-        metavar='',
-        help='number of frames in a sliding window across raw inputs. '
-            'Applied only when --model=original. Should be selected proportionate to '
-            'the kernel size to avoid operations with mostly zeroes (default: 50)')
-    parser_train_model.add_argument(
-        '--layers',
-        type=int,
-        nargs='+',
-        metavar='',
-        help='list of number of ST-GCN layers per stage (default: [9])')
-    parser_train_model.add_argument(
-        '--in_ch',
-        type=int,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of number of input channels per ST-GCN layer per stage. '
-            'For multi-stage, pass --in_ch parameter multiple times '
-            '(default: [[64,64,64,64,128,128,128,256,256]])')
-    parser_train_model.add_argument(
-        '--out_ch',
-        type=int,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of number of output channels per ST-GCN layer per stage. '
-            'For multi-stage, pass --out_ch parameter multiple times '
-            '(default: [[64,64,64,128,128,128,256,256,256]])')
-    parser_train_model.add_argument(
-        '--stride',
-        type=int,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of size of stride in temporal accumulation per ST-GCN layer per stage. '
-            'For multi-stage, pass --stride parameter multiple times '
-            '(default: [[1,1,1,2,1,1,2,1,1]])')
-    parser_train_model.add_argument(
-        '--residual',
-        type=int,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of binary flags specifying residual connection per ST-GCN layer per stage. '
-            'For multi-stage, pass --residual parameter multiple times '
-            '(default: [[0,1,1,1,1,1,1,1,1]])')
-    parser_train_model.add_argument(
-        '--dropout',
-        type=float,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of dropout values per ST-GCN layer per stage. '
-            'For multi-stage, pass --dropout parameter multiple times '
-            '(default: [[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]])')
-    parser_train_model.add_argument(
-        '--iou_threshold',
-        type=float,
-        nargs='+',
-        metavar='',
-        help='list of IoU thesholds for F1@k metric (default: [0.1,0.25,0.5])')
-    parser_train_model.add_argument(
-        '--graph',
-        type=str,
-        metavar='',
-        help='path to the skeleton graph specification file '
-            '(default: data/skeletons/openpose.json)')
-    # optimizer arguments
-    parser_train_optim.add_argument(
-        '--seed',
-        type=int,
-        metavar='',
-        help='seed for the random number generator (default: 1538574472)')
-    parser_train_optim.add_argument(
-        '--epochs',
-        type=int,
-        metavar='',
-        help='number of epochs to train the NN over (default: 100)')
-    parser_train_optim.add_argument(
-        '--checkpoints',
-        type=int,
-        nargs='+',
-        metavar='',
-        help='list of epochs to checkpoint the model at '
-            '(default: [19, 39, 59, 79, 99])')
-    parser_train_optim.add_argument(
-        '--learning_rate',
-        type=float,
-        metavar='',
-        help='learning rate of the optimizer (default: 0.01)')
-    parser_train_optim.add_argument(
-        '--learning_rate_decay',
-        type=float,
-        metavar='',
-        help='learning rate decay factor of the optimizer (default: 0.1)')
-    parser_train_optim.add_argument(
-        '--batch_size',
-        type=int,
-        metavar='',
-        help='number of captures to process in a minibatch (default: 16)')
-    # IO arguments
-    parser_train_io.add_argument(
-        '--data',
-        metavar='',
-        help='path to the dataset directory (default: data/pku-mmd)')
-    parser_train_io.add_argument(
-        '--dataset_type',
-        metavar='',
-        help='type of the dataset (default: file)')
-    parser_train_io.add_argument(
-        '--actions',
-        metavar='',
-        help='path to the action classes file (default: data/pku-mmd/actions.txt)')
-    parser_train_io.add_argument(
-        '--out',
-        metavar='',
-        help='path to the output directory (default: pretrained_models/pku-mmd)')
-    parser_train_io.add_argument(
-        '--backup',
-        metavar='',
-        help='path to the backup directory to copy over final files after completion (default: None)')
-    parser_train_io.add_argument(
-        '--checkpoint',
-        type=str,
-        metavar='',
-        default=None,
-        help='path to the checkpoint to restore states from (default: None)')
-    parser_train_io.add_argument(
-        '--log',
-        nargs=2,
-        type=argparse.FileType('w'),
-        # const=[t1+t2+'.txt' for t1, t2 in zip(['log.o.','log.e.'],2*[str(time.time())])],
-        default=[sys.stdout, sys.stderr],
-        metavar='',
-        help='files to log the script to. Only argument without default option in --config '
-            '(default: stdout, stderr)')
-    parser_train_io.add_argument(
-        '--email',
-        type=str,
-        metavar='',
-        default=None,
-        help='email address to send update notifications to (default: None)')
-    parser_train_io.add_argument(
-        '-v', '--verbose', dest='verbose',
-        action='count',
-        default=0,
-        help='level of log detail (default: 0)')
-
+            '(default: config/pku-mmd/stgcn_local.json)')
+    
     # test command parser
     parser_test = subparsers.add_parser(
         'test',
         usage="""%(prog)s\n\t[-h]
-            \r\t[--config FILE]
-            \r\t[--model MODEL {realtime|buffer_realtime|batch|original}]
-            \r\t[--strategy STRATEGY {uniform|distance|spatial}]
-            \r\t[--in_feat IN_FEAT]
-            \r\t[--stages STAGES]
-            \r\t[--buffer BUFFER]
-            \r\t[--kernel [KERNEL]]
-            \r\t[--segment SEGMENT]
-            \r\t[--importance]
-            \r\t[--latency]
-            \r\t[--receptive_field FIELD]
-            \r\t[--layers [LAYERS]]
-            \r\t[--in_ch [IN_CH,[...]]]
-            \r\t[--out_ch [OUT_CH,[...]]]
-            \r\t[--stride [STRIDE,[...]]]
-            \r\t[--residual [RESIDUAL,[...]]]
-            \r\t[--dropout [DROPOUT,[...]]]
-            \r\t[--iou_threshold [THRESHOLDS]]
-            \r\t[--graph FILE]
-
-            \r\t[--data DATA_DIR]
-            \r\t[--dataset_type TYPE]
-            \r\t[--actions FILE]
-            \r\t[--out OUT_DIR]
-            \r\t[--backup BACKUP_DIR]
-            \r\t[--checkpoint CHECKPOINT]
-            \r\t[--log O_FILE E_FILE]
-            \r\t[--email EMAIL]
-            \r\t[-v[vv]]""",
-        help='test target ST-GCN network',
-        epilog='TODO: add the epilog')
-
-    parser_test_model = parser_test.add_argument_group(
-        'model',
-        'arguments for configuring the ST-GCN model. '
-        'If an argument is not provided, defaults to value inside config file. '
-        'User can provide own config JSON file using --config argument, '
-        'but it is the user\'s responsibility to provide all needed parameters')
-    parser_test_io = parser_test.add_argument_group(
-        'IO',
-        'all miscallenous IO, log, file and path arguments')
-
-    # model arguments
-    parser_test_model.add_argument(
+            \r\t[--config FILE]""",
+        help='test target continual HAR network',
+        epilog='Maxim Yudayev (maxim.yudayev@kuleuven.be)')
+    parser_test.add_argument(
         '--config',
         type=str,
-        default='config/pku-mmd/realtime_local.json',
+        default='config/pku-mmd/stgcn_local.json',
         metavar='',
         help='path to the NN config file. Must be the last argument if combined '
             'with other CLI arguments. Provides default values for all arguments, except --log '
-            '(default: config/pku-mmd/realtime_local.json)')
-    parser_test_model.add_argument(
-        '--model',
-        choices=['realtime','buffer_realtime','batch','original'],
-        metavar='',
-        help='type of NN model to use (default: realtime)')
-    parser_test_model.add_argument(
-        '--strategy',
-        choices=['uniform','distance','spatial'],
-        metavar='',
-        help='type of graph partitioning strategy to use (default: spatial)')
-    parser_test_model.add_argument(
-        '--in_feat',
-        type=int,
-        metavar='',
-        help='number of features/channels in data samples (default: 3)')
-    parser_test_model.add_argument(
-        '--stages',
-        type=int,
-        metavar='',
-        help='number of ST-GCN stages to stack (default: 1)')
-    parser_test_model.add_argument(
-        '--buffer',
-        type=int,
-        metavar='',
-        help='number of frames to buffer before batch processing. '
-            'Applied only when --model=buffer_realtime (default: 1)')
-    parser_test_model.add_argument(
-        '--kernel',
-        type=int,
-        nargs='+',
-        metavar='',
-        help='list of temporal kernel sizes (Gamma) per stage (default: [9])')
-    parser_test_model.add_argument(
-        '--segment',
-        type=int,
-        metavar='',
-        help='size of overlapping segments of frames to divide a trial into for '
-            'parallelizing computation (creates a new batch dimension). '
-            'Currently only supports datasets with different length trials. '
-            'Applied only when --model != original and --dataset_type=dir (default: 100)')
-    parser_test_model.add_argument(
-        '--importance',
-        default=True,
-        action='store_true',
-        help='flag specifying whether ST-GCN layers have edge importance weighting '
-            '(default: True)')
-    parser_test_model.add_argument(
-        '--latency',
-        default=False,
-        action='store_true',
-        help='flag specifying whether ST-GCN layers have half-buffer latency when --model!=original, '
-            'or non-overlapping receptive field window when --model=original (default: False)')
-    parser_test_model.add_argument(
-        '--receptive_field',
-        type=int,
-        metavar='',
-        help='number of frames in a sliding window across raw inputs. '
-            'Applied only when --model=original. Should be selected proportionate to '
-            'the kernel size to avoid operations with mostly zeroes (default: 50)')
-    parser_test_model.add_argument(
-        '--layers',
-        type=int,
-        nargs='+',
-        metavar='',
-        help='list of number of ST-GCN layers per stage (default: [9])')
-    parser_test_model.add_argument(
-        '--in_ch',
-        type=int,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of number of input channels per ST-GCN layer per stage. '
-            'For multi-stage, pass --in_ch parameter multiple times '
-            '(default: [[64,64,64,64,128,128,128,256,256]])')
-    parser_test_model.add_argument(
-        '--out_ch',
-        type=int,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of number of output channels per ST-GCN layer per stage. '
-            'For multi-stage, pass --out_ch parameter multiple times '
-            '(default: [[64,64,64,128,128,128,256,256,256]])')
-    parser_test_model.add_argument(
-        '--stride',
-        type=int,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of size of stride in temporal accumulation per ST-GCN layer per stage. '
-            'For multi-stage, pass --stride parameter multiple times '
-            '(default: [[1,1,1,2,1,1,2,1,1]])')
-    parser_test_model.add_argument(
-        '--residual',
-        type=int,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of binary flags specifying residual connection per ST-GCN layer per stage. '
-            'For multi-stage, pass --residual parameter multiple times '
-            '(default: [[0,1,1,1,1,1,1,1,1]])')
-    parser_test_model.add_argument(
-        '--dropout',
-        type=float,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of dropout values per ST-GCN layer per stage. '
-            'For multi-stage, pass --dropout parameter multiple times '
-            '(default: [[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]])')
-    parser_test_model.add_argument(
-        '--iou_threshold',
-        type=float,
-        nargs='+',
-        metavar='',
-        help='list of IoU thesholds for F1@k metric (default: [0.1,0.25,0.5])')
-    parser_test_model.add_argument(
-        '--graph',
-        type=str,
-        metavar='',
-        help='path to the skeleton graph specification file '
-            '(default: data/skeletons/openpose.json)')
-    # IO arguments
-    parser_test_io.add_argument(
-        '--data',
-        metavar='',
-        help='path to the dataset directory (default: data/pku-mmd)')
-    parser_test_io.add_argument(
-        '--dataset_type',
-        metavar='',
-        help='type of the dataset (default: file)')
-    parser_test_io.add_argument(
-        '--actions',
-        metavar='',
-        help='path to the action classes file (default: data/pku-mmd/actions.txt)')
-    parser_test_io.add_argument(
-        '--out',
-        metavar='',
-        help='path to the output directory (default: pretrained_models/pku-mmd)')
-    parser_test_io.add_argument(
-        '--backup',
-        metavar='',
-        help='path to the backup directory to copy over final files after completion (default: None)')
-    parser_test_io.add_argument(
-        '--checkpoint',
-        type=str,
-        metavar='',
-        default=None,
-        help='path to the checkpoint to restore states from (default: None)')
-    parser_test_io.add_argument(
-        '--log',
-        nargs=2,
-        type=argparse.FileType('w'),
-        # const=[t1+t2+'.txt' for t1, t2 in zip(['log.o.','log.e.'],2*[str(time.time())])],
-        default=[sys.stdout, sys.stderr],
-        metavar='',
-        help='files to log the script to. Only argument without default option in --config '
-            '(default: stdout, stderr)')
-    parser_test_io.add_argument(
-        '--email',
-        type=str,
-        metavar='',
-        default=None,
-        help='email address to send update notifications to (default: None)')
-    parser_test_io.add_argument(
-        '-v', '--verbose', dest='verbose',
-        action='count',
-        default=0,
-        help='level of log detail (default: 0)')
+            '(default: config/pku-mmd/stgcn_local.json)')
 
     # benchmark command parser
     parser_benchmark = subparsers.add_parser(
         'benchmark',
         usage="""%(prog)s\n\t[-h]
-            \r\t[--config FILE]
-            \r\t[--model MODEL {realtime|buffer_realtime|batch|original}]
-            \r\t[--strategy STRATEGY {uniform|distance|spatial}]
-            \r\t[--in_feat IN_FEAT]
-            \r\t[--stages STAGES]
-            \r\t[--buffer BUFFER]
-            \r\t[--kernel [KERNEL]]
-            \r\t[--segment SEGMENT]
-            \r\t[--importance]
-            \r\t[--latency]
-            \r\t[--receptive_field FIELD]
-            \r\t[--layers [LAYERS]]
-            \r\t[--in_ch [IN_CH,[...]]]
-            \r\t[--out_ch [OUT_CH,[...]]]
-            \r\t[--stride [STRIDE,[...]]]
-            \r\t[--residual [RESIDUAL,[...]]]
-            \r\t[--dropout [DROPOUT,[...]]]
-            \r\t[--iou_threshold [THRESHOLDS]]
-            \r\t[--graph FILE]
-            \r\t[--backend ARCH {x86|qnnpack}]
-
-            \r\t[--data DATA_DIR]
-            \r\t[--dataset_type TYPE]
-            \r\t[--actions FILE]
-            \r\t[--out OUT_DIR]
-            \r\t[--checkpoint CHECKPOINT]
-            \r\t[--log O_FILE E_FILE]
-            \r\t[--email EMAIL]
-            \r\t[-v[vv]]""",
+            \r\t[--config FILE]""",
         help='benchmark target ST-GCN network (accuracy, scores, latency).',
-        epilog='TODO: add the epilog')
-
-    parser_benchmark_model = parser_benchmark.add_argument_group(
-        'model',
-        'arguments for configuring the ST-GCN model. '
-        'If an argument is not provided, defaults to value inside config file. '
-        'User can provide own config JSON file using --config argument, '
-        'but it is the user\'s responsibility to provide all needed parameters')
-    parser_benchmark_io = parser_benchmark.add_argument_group(
-        'IO',
-        'all miscallenous IO, log, file and path arguments')
-
-    # model arguments
-    parser_benchmark_model.add_argument(
+        epilog='Maxim Yudayev (maxim.yudayev@kuleuven.be)')
+    parser_benchmark.add_argument(
         '--config',
         type=str,
-        default='config/pku-mmd/realtime_local.json',
+        default='config/pku-mmd/stgcn_local.json',
         metavar='',
         help='path to the NN config file. Must be the last argument if combined '
             'with other CLI arguments. Provides default values for all arguments, except --log '
-            '(default: config/pku-mmd/realtime_local.json)')
-    parser_benchmark_model.add_argument(
-        '--model',
-        choices=['realtime','buffer_realtime','batch','original'],
-        metavar='',
-        help='type of NN model to use (default: realtime)')
-    parser_benchmark_model.add_argument(
-        '--strategy',
-        choices=['uniform','distance','spatial'],
-        metavar='',
-        help='type of graph partitioning strategy to use (default: spatial)')
-    parser_benchmark_model.add_argument(
-        '--in_feat',
-        type=int,
-        metavar='',
-        help='number of features/channels in data samples (default: 3)')
-    parser_benchmark_model.add_argument(
-        '--stages',
-        type=int,
-        metavar='',
-        help='number of ST-GCN stages to stack (default: 1)')
-    parser_benchmark_model.add_argument(
-        '--buffer',
-        type=int,
-        metavar='',
-        help='number of frames to buffer before batch processing. '
-            'Applied only when --model=buffer_realtime (default: 1)')
-    parser_benchmark_model.add_argument(
-        '--kernel',
-        type=int,
-        nargs='+',
-        metavar='',
-        help='list of temporal kernel sizes (Gamma) per stage (default: [9])')
-    parser_benchmark_model.add_argument(
-        '--segment',
-        type=int,
-        metavar='',
-        help='size of overlapping segments of frames to divide a trial into for '
-            'parallelizing computation (creates a new batch dimension). '
-            'Currently only supports datasets with different length trials. '
-            'Applied only when --model != original and --dataset_type=dir (default: 100)')
-    parser_benchmark_model.add_argument(
-        '--importance',
-        default=True,
-        action='store_true',
-        help='flag specifying whether ST-GCN layers have edge importance weighting '
-            '(default: True)')
-    parser_benchmark_model.add_argument(
-        '--latency',
-        default=False,
-        action='store_true',
-        help='flag specifying whether ST-GCN layers have half-buffer latency when --model!=original, '
-            'or non-overlapping receptive field window when --model=original (default: False)')
-    parser_benchmark_model.add_argument(
-        '--receptive_field',
-        type=int,
-        metavar='',
-        help='number of frames in a sliding window across raw inputs. '
-            'Applied only when --model=original. Should be selected proportionate to '
-            'the kernel size to avoid operations with mostly zeroes (default: 50)')
-    parser_benchmark_model.add_argument(
-        '--layers',
-        type=int,
-        nargs='+',
-        metavar='',
-        help='list of number of ST-GCN layers per stage (default: [9])')
-    parser_benchmark_model.add_argument(
-        '--in_ch',
-        type=int,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of number of input channels per ST-GCN layer per stage. '
-            'For multi-stage, pass --in_ch parameter multiple times '
-            '(default: [[64,64,64,64,128,128,128,256,256]])')
-    parser_benchmark_model.add_argument(
-        '--out_ch',
-        type=int,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of number of output channels per ST-GCN layer per stage. '
-            'For multi-stage, pass --out_ch parameter multiple times '
-            '(default: [[64,64,64,128,128,128,256,256,256]])')
-    parser_benchmark_model.add_argument(
-        '--stride',
-        type=int,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of size of stride in temporal accumulation per ST-GCN layer per stage. '
-            'For multi-stage, pass --stride parameter multiple times '
-            '(default: [[1,1,1,2,1,1,2,1,1]])')
-    parser_benchmark_model.add_argument(
-        '--residual',
-        type=int,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of binary flags specifying residual connection per ST-GCN layer per stage. '
-            'For multi-stage, pass --residual parameter multiple times '
-            '(default: [[0,1,1,1,1,1,1,1,1]])')
-    parser_benchmark_model.add_argument(
-        '--dropout',
-        type=float,
-        nargs='+',
-        action='append',
-        metavar='',
-        help='list of dropout values per ST-GCN layer per stage. '
-            'For multi-stage, pass --dropout parameter multiple times '
-            '(default: [[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]])')
-    parser_benchmark_model.add_argument(
-        '--iou_threshold',
-        type=float,
-        nargs='+',
-        metavar='',
-        help='list of IoU thesholds for F1@k metric (default: [0.1,0.25,0.5])')
-    parser_benchmark_model.add_argument(
-        '--graph',
-        type=str,
-        metavar='',
-        help='path to the skeleton graph specification file '
-            '(default: data/skeletons/openpose.json)')
-    parser_benchmark_model.add_argument(
-        '--backend',
-        choices=['x86','qnnpack'],
-        type=str,
-        default='x86',
-        metavar='',
-        help='quantization backend (default: x86)')
-    # IO arguments
-    parser_benchmark_io.add_argument(
-        '--data',
-        metavar='',
-        help='path to the dataset directory (default: data/pku-mmd)')
-    parser_benchmark_io.add_argument(
-        '--dataset_type',
-        metavar='',
-        help='type of the dataset (default: file)')
-    parser_benchmark_io.add_argument(
-        '--actions',
-        metavar='',
-        help='path to the action classes file (default: data/pku-mmd/actions.txt)')
-    parser_benchmark_io.add_argument(
-        '--out',
-        metavar='',
-        help='path to the output directory (default: pretrained_models/pku-mmd)')
-    parser_benchmark_io.add_argument(
-        '--checkpoint',
-        type=str,
-        metavar='',
-        default=None,
-        help='path to the checkpoint to restore states from (default: None)')
-    parser_benchmark_io.add_argument(
-        '--log',
-        nargs=2,
-        type=argparse.FileType('w'),
-        # const=[t1+t2+'.txt' for t1, t2 in zip(['log.o.','log.e.'],2*[str(time.time())])],
-        default=[sys.stdout, sys.stderr],
-        metavar='',
-        help='files to log the script to. Only argument without default option in --config '
-            '(default: stdout, stderr)')
-    parser_benchmark_io.add_argument(
-        '--email',
-        type=str,
-        metavar='',
-        default=None,
-        help='email address to send update notifications to (default: None)')
-    parser_benchmark_io.add_argument(
-        '-v', '--verbose', dest='verbose',
-        action='count',
-        default=0,
-        help='level of log detail (default: 0)')
+            '(default: config/pku-mmd/stgcn_local.json)')
 
     parser_train.set_defaults(func=train)
     parser_test.set_defaults(func=test)
     parser_benchmark.set_defaults(func=benchmark)
 
     # parse the arguments
-    args = parser.parse_args()
-
-    # enter the appropriate command
-    args.func(args)
+    main(parser.parse_args())

@@ -1,0 +1,48 @@
+{
+    "model": {
+        "model": "st-gcn",
+        "strategy": "spatial",
+        "data": "data/imu_fogit_ABCD",
+        "dataset_type": "dir",
+        "out": "pretrained_models/imu_fogit_ABCD",
+        "backup": "pretrained_models/imu_fogit_ABCD-backup",
+        "actions": "data/imu_fogit_ABCD/actions.txt",
+        "graph": "data/skeletons/imu_fogit_ABCD.json",
+        "in_feat": 6,
+        "stages": 1,
+        "layers": [9],
+        "kernel": [9],
+        "segment": 100,
+        "latency": false,
+        "importance": true,
+        "receptive_field": 300,
+        "in_ch": [
+            [64,64,64,64,128,128,128,256,256]
+        ],
+        "out_ch": [
+            [64,64,64,128,128,128,256,256,256]
+        ],
+        "stride": [
+            [1,1,1,2,1,1,2,1,1]
+        ],
+        "residual": [
+            [1,1,1,1,1,1,1,1,1]
+        ],
+        "dropout": [
+            [0,0,0,0,0,0,0,0,0]
+        ],
+        "iou_threshold": [0.1,0.25,0.5]
+    },
+    "optimizer": {
+        "seed": 1538574472,
+        "epochs": 5,
+        "checkpoint_indices": [0,1,2,3,4],
+        "learning_rate": 0.0005,
+        "learning_rate_decay": 1.0,
+        "batch_size": 64
+    },
+    "job": {
+        "email": "maxim.yudayev@kuleuven.be",
+        "demo": []
+    }
+}

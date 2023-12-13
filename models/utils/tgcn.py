@@ -41,6 +41,9 @@ class ConvTemporalGraphical(nn.Module):
         
         super().__init__()
 
+        self.out_channels = out_channels
+        self.partitions = partitions
+
         self.kernel_size = kernel_size
         self.conv = nn.Conv2d(
             in_channels,
@@ -53,25 +56,25 @@ class ConvTemporalGraphical(nn.Module):
 
 
     def forward(self, x, A):
-        """TODO: verify if .view() turns multi-dimensional tensor into a matrix 
-        and does an incorrect dot product.
+        """Broadcasted N-dimensional matrix multiplication with the 3D/4D adjacency matrix.
+
+        Args:
+            x : ``Tensor[N, C, L, V]`` 
+                Input data.
+
+            A : ``Tensor[N, P, V, V] | Tensor[P, V, V]`` 
+                Adjacency matrix.
         """
 
-        assert A.size(1) == self.kernel_size
         # updating feature vectors on each joint
+        N,_,L,V = x.size()
         x = self.conv(x)
-        # performing spatial accumulation of new feature vectors for each joint
-        n, kc, t, v = x.size()
-        x = x.view(n, A.size(0), kc//A.size(0), t, v)
-        # x = torch.einsum('nkctv,kvw->nctw', (x, A))
-        # equivalent to:
-        x = x.permute(0, 2, 3, 1, 4).contiguous()
-        n, c, t, k, v = x.size()
-        k, v, w = A.size()
-        x = x.view(n * c * t, k * v)
-        A = A.view(k * v, w)
-        x = torch.mm(x, A)
-        x = x.view(n, c, t, w)
+        x = x.view(N, self.partitions, self.out_channels*L, V)
+        # (N,P*C,L,V) -> (N,P,C*L,V)
 
-        return x.contiguous()
+        # performing spatial accumulation of new feature vectors for each joint with A of (N,P,V,v) or (P,V,v)
+        x = torch.matmul(x, A)
+        # (N,P,C*L,V)
+        x = torch.sum(x, dim=1).view(N, self.out_channels, L, V)
+        return x
         
