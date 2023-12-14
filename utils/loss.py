@@ -9,7 +9,7 @@ class Loss:
     def __init__(self, rank, class_dist, output_type='logits'):
         if output_type=='logits':
             self.foo = lambda x: x
-            self.bar = lambda x: F.softmax(x, dim=1)
+            self.bar = lambda x: F.log_softmax(x, dim=1)
         elif output_type=='logsoftmax':
             self.foo = lambda x: x
             self.bar = lambda x: torch.exp(x)
