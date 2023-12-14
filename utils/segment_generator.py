@@ -32,7 +32,7 @@ class BufferSegment(Segment):
         # (temp = 0 - trial splits perfectly, temp < 0 - trial shorter than S, temp > 0 - padding needed to perfectly split)
         P_end = 0 if temp == 0 else (self.world_size-temp)
         
-        self.S = ((L+P_end-(self.world_size-1)*(self.G-1))//self.world_size)+(self.G-1)
+        self.S = ((L+P_end-(self.world_size-1)*(self.G-1))//self.world_size)+(0 if self.world_size==1 else self.G-1)
 
         return P_start, P_end
 
@@ -54,7 +54,7 @@ class BufferSegment(Segment):
             kernel_size=(1, self.S),
             stride=(1, self.S-self.G))[:,:,0]
 
-        return predictions[:,:,:-P_end]
+        return predictions[:,:,:L]
 
 
 class WindowSegment(Segment):
