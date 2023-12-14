@@ -43,10 +43,7 @@ class Model(nn.Module):
         temporal_kernel_size = conf['kernel']
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
         
-        if kwargs['normalization'] is 'LayerNorm':
-            self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)])
-        elif kwargs['normalization'] is 'BatchNorm':
-            self.norm_in = BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
+        self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
 
         # fcn for feature remapping of input to the network size
         self.fcn_in = nn.Conv2d(in_channels=conf['in_feat'], out_channels=conf['in_ch'][0], kernel_size=1)
@@ -146,7 +143,7 @@ class StgcnLayer(nn.Module):
             partitions)
 
         self.tcn = nn.Sequential(
-            LayerNorm([out_channels, 1, num_joints]) if normalization is 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False),
+            LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.ReLU(inplace=True),
             nn.Conv2d(
                 out_channels,
@@ -154,7 +151,7 @@ class StgcnLayer(nn.Module):
                 (kernel_size[0], 1),
                 stride=(stride, 1),
                 padding=padding),
-            LayerNorm([out_channels, 1, num_joints]) if normalization is 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False),
+            LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.Dropout(dropout, inplace=True))
 
         if not residual:
@@ -168,7 +165,7 @@ class StgcnLayer(nn.Module):
                     out_channels,
                     kernel_size=1,
                     stride=(stride, 1)),
-                LayerNorm([out_channels, 1, num_joints]) if normalization is 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False))
+                LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False))
 
         self.relu = nn.ReLU(inplace=True)
 

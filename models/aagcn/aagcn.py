@@ -28,7 +28,7 @@ class Model(nn.Module):
         self.rank = rank
 
         self.streams = nn.ModuleList([nn.ModuleDict({
-            "norm_in": LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] is 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False),
+            "norm_in": LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False),
             "fcn_in": nn.Conv2d(
                 in_channels=conf['in_feat'], 
                 out_channels=conf['in_ch'][0], 
