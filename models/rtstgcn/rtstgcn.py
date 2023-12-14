@@ -98,6 +98,8 @@ class Model(nn.Module):
 
         # input capture normalization
         # (N,C,L,V)
+        self.normalization = kwargs['normalization']
+        self.rank = rank
         self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
 
         # fcn for feature remapping of input to the network size
@@ -165,7 +167,6 @@ class Model(nn.Module):
         stack = [
             OnlineLayer(
                 num_joints=self.A.shape[-1],
-                fifo_latency=self.conf['latency'],
                 in_channels=self.conf['in_ch'][i],
                 out_channels=self.conf['out_ch'][i],
                 kernel_size=self.conf['kernel'],
@@ -174,7 +175,9 @@ class Model(nn.Module):
                 residual=not not self.conf['residual'][i],
                 dropout=self.conf['dropout'][i],
                 importance=self.conf['importance'],
-                graph=self.A)
+                graph=self.A,
+                rank=self.rank,
+                normalization=self.normalization)
             for i in range(self.conf['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
@@ -428,7 +431,9 @@ class OnlineLayer(nn.Module):
         dropout,
         residual,
         importance,
-        graph):
+        graph,
+        rank,
+        normalization='LayerNorm'):
         """
         Args:
             in_channels : ``int``
@@ -472,17 +477,16 @@ class OnlineLayer(nn.Module):
 
         fifo_size = stride*(kernel_size-1)+1
         self.is_residual = residual
-        self.is_residual_noconv = residual and (in_channels == out_channels) and (stride == 1)
+        self.is_residual_conv = residual and not ((in_channels == out_channels) and (stride == 1))
 
         # learnable edge importance weighting matrices (each layer, separate weighting)
         # just a placeholder for successful load_state_dict() from <StgcnLayer>._swap_layers_for_inference()
-        self.edge_importance = nn.Parameter(torch.ones(num_partitions,num_joints,num_joints), requires_grad=False) if importance else 1
+        self.edge_importance = nn.Parameter(torch.ones(num_partitions,num_joints,num_joints,device=rank), requires_grad=False) if importance else 1
 
         # convolution of incoming frame
         # (out_channels is a multiple of the partition number
         # to avoid for-looping over several partitions)
         # partition-wise convolution results are basically stacked across channel-dimension
-        # self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1, bias=False)
         self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1)
 
         # non-traceable natively spatial and temporal aggregation of remapped node features
@@ -491,15 +495,14 @@ class OnlineLayer(nn.Module):
 
         # normalization and dropout on main branch
         self.bn_relu = nn.Sequential(
-            LayerNorm([out_channels, 1, num_joints]),
+            LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.ReLU())
 
         # residual branch
-        if residual and not ((in_channels == out_channels) and (stride == 1)):
+        if self.is_residual_conv:
             self.residual = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
-                LayerNorm([out_channels, 1, num_joints]),
-            )
+                LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False))
         else:
             self.residual = nn.Identity()
 
@@ -575,7 +578,8 @@ class AggregateStgcn(nn.Module):
         # FIFO for intermediate Gamma graph frames after multiplication with adjacency matrices
         # (N,G,C,V) - (N)batch, (G)amma, (C)hannels, (V)ertices
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
-        self.A = torch.tensor(graph, dtype=torch.float32, requires_grad=False)
+        # self.A = torch.tensor(graph, dtype=torch.float32, requires_grad=False)
+        self.A = graph.clone().detach()
 
 
     def forward(self, x):

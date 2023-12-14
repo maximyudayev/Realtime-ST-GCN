@@ -8,7 +8,8 @@
         "actions": "data/pku-mmdv1/actions.txt",
         "graph": "data/skeletons/pku-mmd.json",
         "demo": [175,293,37],
-        "iou_threshold": [0.1,0.25,0.5]
+        "iou_threshold": [0.1,0.25,0.5],
+        "backend": "x86"
     },
     "arch": {
         "strategy": "spatial",
@@ -25,8 +26,8 @@
             "stages": 1,
             "layers": 9,
             "kernel": 9,
-            "in_ch":[64,64,64,64,128,128,128,256,256],
-            "out_ch":[64,64,64,128,128,128,256,256,256],
+            "in_ch": [64,64,64,64,128,128,128,256,256],
+            "out_ch": [64,64,64,128,128,128,256,256,256],
             "stride": [1,1,1,2,1,1,2,1,1],
             "residual": [1,1,1,1,1,1,1,1,1],
             "dropout": [0,0,0,0,0,0,0,0,0]

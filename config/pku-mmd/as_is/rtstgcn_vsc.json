@@ -8,7 +8,8 @@
         "actions": "/data/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1/actions.txt",
         "graph": "/data/leuven/341/vsc34153/rt-st-gcn/data/skeletons/pku-mmd.json",
         "demo": [175,293,37],
-        "iou_threshold": [0.1,0.25,0.5]
+        "iou_threshold": [0.1,0.25,0.5],
+        "backend": "x86"
     },
     "arch": {
         "strategy": "spatial",

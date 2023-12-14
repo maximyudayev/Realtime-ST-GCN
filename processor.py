@@ -233,7 +233,7 @@ class Processor:
         """Returns size of the model."""
 
         temp_file = "{0}/temp.pt".format(save_dir)
-        torch.save({"model_state_dict": self.model.module.state_dict()}, temp_file)
+        torch.save({"model_state_dict": self.model.state_dict()}, temp_file)
         size = os.path.getsize(temp_file)/1e6
         os.remove(temp_file)
         return size
@@ -367,19 +367,12 @@ class Processor:
         _, _, L, _ = captures.size()
 
         latency = 0
-        predictions = self.segment_generator.alloc_output(L, dtype=captures.dtype, device=self.rank)
-
-        P_start, P_end = self.segment_generator.pad_sequence_rt(L)
-        
-        captures = F.pad(captures, (0, 0, P_start, P_end))
-
-        # generator comprehension for lazy processing using start and end indices of subsegments
-        capture_gen = self.segment_generator.get_generator_rt(L)
+        predictions = self.segment_generator.alloc_output(L, dtype=captures.dtype)
 
         # generate results for the consumer (effectively limits processing burden by splitting long sequence into manageable independent overlapping chunks)
-        for i, (start, end) in enumerate(capture_gen):
+        for i in range(L):
             start_time = time.time()
-            predictions[:,:,i:i+1] = self.model(captures[:,:,start:end])
+            predictions[:,:,i:i+1] = self.model(captures[:,:,i:i+1])
             latency += (time.time() - start_time)
 
         # get the loss of the model
@@ -850,9 +843,9 @@ class Processor:
 
         # replace trainable layers of the proposed model with quantizeable inference-only version
         # TODO: extend to other models and call using meaningful common method name
-        if proc_conf['model'] == 'realtime':
-            self.model._swap_layers_for_inference()
-            self.model.eval_()
+        self.model._swap_layers_for_inference()
+        self.model.eval_()
+        
         self.model.eval()
         
         # measure FP32 latency on CPU
@@ -881,6 +874,7 @@ class Processor:
             log=job_conf['log'],
             num_samples=1)
 
+        self._reduce_metrics()
         self._save_metrics(proc_conf['save_dir'], "_fp32")
 
         self._demo_segmentation_masks(
@@ -914,6 +908,7 @@ class Processor:
 
         size_int8 = self._model_size(proc_conf['save_dir'])
 
+        self._reduce_metrics()
         self._save_metrics(proc_conf['save_dir'], "_int8")
 
         self._demo_segmentation_masks(

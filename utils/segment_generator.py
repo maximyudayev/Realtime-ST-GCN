@@ -13,7 +13,7 @@ class Segment:
         self.world_size = world_size
 
     def alloc_output(self, L, dtype):
-        return torch.zeros(self.stages, self.num_classes, L, dtype=dtype, device=self.rank)
+        return torch.zeros(self.num_stages, self.num_classes, L, dtype=dtype, device=self.rank)
 
 
 class BufferSegment(Segment):
