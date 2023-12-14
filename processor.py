@@ -157,7 +157,7 @@ def setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args):
     model = _build_model(Model, rank, args)
     
     loss = Loss(rank, train_class_dist, args.arch['output_type'])
-    segment_generator = SegmentGenerator(rank, world_size, **args.arch)
+    segment_generator = SegmentGenerator(rank=rank, world_size=world_size, **args.arch)
     statistics = Statistics()
 
     return model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args

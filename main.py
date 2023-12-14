@@ -77,25 +77,24 @@ def train(rank, world_size, args):
         optim_conf=args.optimizer,
         job_conf=args.job)
 
-    if rank == 0 or not torch.cuda.is_available() or not args.processor['is_ddp']:
-        # copy over resulting files of interest into the $VSC_DATA persistent storage
-        if args.processor.get('backup'):
-            for f in [
-                'accuracy-curve.csv',
-                'train-validation-curve.csv',
-                'final.pt',
-                'macro-F1@k.csv',
-                'accuracy.csv',
-                'edit.csv',
-                'confusion-matrix.csv',
-                *['segmentation-{0}.csv'.format(i) for i in args.processor['demo']]]:
-                os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
+    # copy over resulting files of interest into the $VSC_DATA persistent storage
+    if args.processor.get('backup'):
+        for f in [
+            'accuracy-curve.csv',
+            'train-validation-curve.csv',
+            'final.pt',
+            'macro-F1@k.csv',
+            'accuracy.csv',
+            'edit.csv',
+            'confusion-matrix.csv',
+            *['segmentation-{0}.csv'.format(i) for i in args.processor['demo']]]:
+            os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
 
-        os.system(
-            'mail -s "[{0}]: COMPLETED" {1} <<< ""'
-            .format(
-                args.job['jobname'],
-                args.job['email']))
+    os.system(
+        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
+        .format(
+            args.job['jobname'],
+            args.job['email']))
 
     # perform common cleanup
     cleanup(args)
@@ -138,22 +137,21 @@ def test(rank, world_size, args):
         proc_conf=args.processor,
         job_conf=args.job)
 
-    if rank == 0 or not torch.cuda.is_available() or not args.processor['is_ddp']:
-        # copy over resulting files of interest into the $VSC_DATA persistent storage
-        if args.processor.get('backup'):
-            for f in [
-                'macro-F1@k.csv',
-                'accuracy.csv',
-                'edit.csv',
-                'confusion-matrix.csv',
-                *['segmentation-{0}.csv'.format(i) for i in args.processor['demo']]]:
-                os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
+    # copy over resulting files of interest into the $VSC_DATA persistent storage
+    if args.processor.get('backup'):
+        for f in [
+            'macro-F1@k.csv',
+            'accuracy.csv',
+            'edit.csv',
+            'confusion-matrix.csv',
+            *['segmentation-{0}.csv'.format(i) for i in args.processor['demo']]]:
+            os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
 
-        os.system(
-            'mail -s "[{0}]: COMPLETED" {1} <<< ""'
-            .format(
-                args.job['jobname'],
-                args.job['email']))
+    os.system(
+        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
+        .format(
+            args.job['jobname'],
+            args.job['email']))
 
     # perform common cleanup
     cleanup(args)
@@ -204,26 +202,25 @@ def benchmark(rank, world_size, args):
         arch_conf=args.arch,
         job_conf=args.job)
 
-    if rank == 0 or not torch.cuda.is_available() or not args.processor['is_ddp']:
-        if args.processor.get('backup'):
-            for f in [
-                'accuracy.csv',
-                'loss.csv',
-                'macro-F1@k.csv',
-                'edit.csv',
-                'latency.csv',
-                'model-size.csv',
-                'confusion-matrix_fp32.csv',
-                'confusion-matrix_int8.csv',
-                *['segmentation-{0}_fp32.csv'.format(i) for i in args.processor['demo']],
-                *['segmentation-{0}_int8.csv'.format(i) for i in args.processor['demo']]]:
-                os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
+    if args.processor.get('backup'):
+        for f in [
+            'accuracy.csv',
+            'loss.csv',
+            'macro-F1@k.csv',
+            'edit.csv',
+            'latency.csv',
+            'model-size.csv',
+            'confusion-matrix_fp32.csv',
+            'confusion-matrix_int8.csv',
+            *['segmentation-{0}_fp32.csv'.format(i) for i in args.processor['demo']],
+            *['segmentation-{0}_int8.csv'.format(i) for i in args.processor['demo']]]:
+            os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
 
-        os.system(
-            'mail -s "[{0}]: COMPLETED" {1} <<< ""'
-            .format(
-                args.job['jobname'],
-                args.job['email']))
+    os.system(
+        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
+        .format(
+            args.job['jobname'],
+            args.job['email']))
 
     # perform common cleanup
     cleanup(args)
