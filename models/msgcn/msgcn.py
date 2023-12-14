@@ -13,7 +13,6 @@ class Model(nn.Module):
 
         self.stages = kwargs['stages']
         self.num_classes = kwargs['num_classes']
-        self.segment = kwargs['segment']
         self.rank = rank
 
         conf = kwargs['ms-tcn']
@@ -45,7 +44,8 @@ class Model(nn.Module):
 
 
     def forward(self, x):
-        outputs = torch.zeros(self.stages, 1, self.num_classes, self.segment, device=self.rank)
+        _,_,L,_ = x.size()
+        outputs = torch.zeros(self.stages, 1, self.num_classes, L, device=self.rank)
 
         x = self.generator_stage(x)
         # (N,C,1) -> (1,C,L,1) | N=L

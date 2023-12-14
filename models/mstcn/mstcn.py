@@ -14,7 +14,6 @@ class Model(nn.Module):
         conf = kwargs['ms-tcn']
         self.stages = conf['stages']
         self.num_classes = kwargs['num_classes']
-        self.segment = kwargs['segment']
         self.rank = rank
 
         self.generator_stage = SingleStage(
@@ -49,8 +48,9 @@ class Model(nn.Module):
 
 
     def forward(self, x):
+        _,_,L,_ = x.size()
         # NOTE: original implementation passes probabilities to refinement stages, not logits
-        outputs = torch.zeros(self.stages, 1, self.num_classes, self.segment, device=self.rank)
+        outputs = torch.zeros(self.stages, 1, self.num_classes, L, device=self.rank)
         
         x = self.generator_stage(x)
         # (1,C,L,V)
