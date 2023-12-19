@@ -8,16 +8,15 @@ class Model(nn.Module):
     """
     """
 
-    def __init__(self, rank, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__()
 
         self.stages = kwargs['stages']
         self.num_classes = kwargs['num_classes']
-        self.rank = rank
 
         conf = kwargs['ms-tcn']
 
-        self.generator_stage = Stgcn(rank, **kwargs)
+        self.generator_stage = Stgcn(**kwargs)
 
         self.refinement_stages = nn.ModuleList([
             MsTcnStage(
@@ -45,7 +44,9 @@ class Model(nn.Module):
 
     def forward(self, x):
         _,_,L,_ = x.size()
-        outputs = torch.zeros(self.stages, 1, self.num_classes, L, device=self.rank)
+        device = x.get_device()
+
+        outputs = torch.zeros(self.stages, 1, self.num_classes, L, device=device)
 
         x = self.generator_stage(x)
         # (N,C,1) -> (1,C,L,1) | N=L

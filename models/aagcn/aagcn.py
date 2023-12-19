@@ -6,7 +6,7 @@ from models.stgcn.stgcn import StgcnLayer
 
 
 class Model(nn.Module):
-    def __init__(self, rank, **kwargs):
+    def __init__(self, **kwargs):
 
         super(Model, self).__init__()
 
@@ -25,7 +25,6 @@ class Model(nn.Module):
         
         self.segment = kwargs['segment']
         self.num_classes = kwargs['num_classes']
-        self.rank = rank
 
         self.streams = nn.ModuleList([nn.ModuleDict({
             "norm_in": LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False),
@@ -35,7 +34,6 @@ class Model(nn.Module):
                 kernel_size=1),
             "gcn_networks": nn.ModuleList([
                 AgcnLayer(
-                    rank=rank,
                     in_channels=conf['in_ch'][i],
                     out_channels=conf['out_ch'][i],
                     kernel_size=kernel_size,
@@ -45,8 +43,6 @@ class Model(nn.Module):
                     dropout=conf['dropout'][i],
                     num_joints=kwargs['graph']['num_node'],
                     importance=conf['importance'],
-                    segment=kwargs['segment'],
-                    receptive_field=kwargs['receptive_field'],
                     normalization=kwargs['normalization'])
                 for i in range(conf['layers'])]),
             "fcn_out": nn.Conv2d(
@@ -64,8 +60,10 @@ class Model(nn.Module):
 
 
     def forward(self, x_joint):
+        device = x_joint.get_device()
+
         # placeholder for model's output between two streams
-        output = torch.zeros(self.segment, self.num_classes, 1, device=self.rank)
+        output = torch.zeros(self.segment, self.num_classes, 1, device=device)
 
         # turns joint coordinates into bone coordinate vectors, pointing from source to target joint
         # gets the "far" immediately-connected joints per each joint (row)
@@ -102,8 +100,7 @@ class Model(nn.Module):
 
 class AgcnLayer(nn.Module):
     def __init__(
-        self, 
-        rank,
+        self,
         in_channels, 
         out_channels, 
         kernel_size, 
@@ -113,8 +110,6 @@ class AgcnLayer(nn.Module):
         dropout,
         num_joints,
         importance,
-        segment,
-        receptive_field,
         normalization='LayerNorm'):
 
         super(AgcnLayer, self).__init__()
@@ -122,13 +117,11 @@ class AgcnLayer(nn.Module):
         coeff_embedding = 4
 
         self.embedding_channels = out_channels//coeff_embedding
-        self.segment = segment
-        self.receptive_field = receptive_field
         self.partitions = partitions
         self.num_joints = num_joints
 
         # fully-learnable adjacency matrix B, initialized as 0's
-        self.B = nn.Parameter(torch.zeros(partitions, num_joints, num_joints, device=rank), requires_grad=True) if importance else 1
+        self.B = nn.Parameter(torch.zeros(partitions, num_joints, num_joints), requires_grad=True) if importance else 1
 
         # self-attention adjacency matrix C, produces 2 matrices
         self.theta = nn.Conv2d(in_channels, self.embedding_channels*partitions, 1)
@@ -148,12 +141,12 @@ class AgcnLayer(nn.Module):
 
 
     def forward(self, x, A):
-        L = x.size(2)
+        N,_,L,_ = x.size()
         # (N,C,L,V -> N,P,C'*L,V)
-        theta = self.theta(x).view(self.segment, self.partitions, self.embedding_channels*L, self.num_joints).permute(0,1,3,2)
-        phi = self.phi(x).view(self.segment, self.partitions, self.embedding_channels*L, self.num_joints)
+        theta = self.theta(x).view(N, self.partitions, self.embedding_channels*L, self.num_joints).permute(0,1,3,2)
+        phi = self.phi(x).view(N, self.partitions, self.embedding_channels*L, self.num_joints)
         # (N,P,V,V)
-        C = F.softmax(torch.matmul(theta,phi), dim=3)
+        C = F.softmax(torch.matmul(theta, phi), dim=3)
         
         # graph convolution
         x = self.st_gcn(x, A+self.B+C)
