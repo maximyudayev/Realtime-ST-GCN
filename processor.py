@@ -26,7 +26,7 @@ def _build_model(Model, rank, args):
         PyTorch Model corresponding to the user-defined CLI parameters, configured as DDP if using GPUs.
     """
 
-    model = Model(rank, **args.arch)
+    model = Model(rank=rank, **args.arch)
 
     if torch.cuda.device_count() > 1:
         model = DP(model)

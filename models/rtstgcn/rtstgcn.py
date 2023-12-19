@@ -39,7 +39,6 @@ class Model(nn.Module):
 
     def __init__(
         self,
-        rank=None,
         **kwargs) -> None:
         """
         Kwargs:
@@ -93,13 +92,12 @@ class Model(nn.Module):
         # register the normalized adjacency matrix as a non-learnable saveable parameter in the top-level container
         # TODO: check if the buffer gets automatically quantized (relevant only for the size estimate)
         self.graph = Graph(strategy=kwargs['strategy'], **kwargs['graph'])
-        A = torch.tensor(self.graph.A, dtype=torch.float32, device=rank, requires_grad=False)
+        A = torch.tensor(self.graph.A, dtype=torch.float32, requires_grad=False)
         self.register_buffer('A', A)
 
         # input capture normalization
         # (N,C,L,V)
         self.normalization = kwargs['normalization']
-        self.rank = rank
         self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
 
         # fcn for feature remapping of input to the network size
@@ -118,12 +116,11 @@ class Model(nn.Module):
                 dropout=self.conf['dropout'][i],
                 importance=self.conf['importance'],
                 graph=self.A,
-                rank=rank,
                 normalization=kwargs['normalization'])
             for i in range(self.conf['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
-        self.st_gcn = nn.Sequential(*stack)
+        self.st_gcn = nn.ModuleList(stack)
 
         # global pooling
         # converts (N,C,L,V) -> (N,C,L,1)
@@ -148,7 +145,8 @@ class Model(nn.Module):
         x = self.fcn_in(x)
 
         # feed the frame into the ST-GCN block backbone
-        x = self.st_gcn(x)
+        for gcn in self.st_gcn:
+            x = gcn(x, self.A)
 
         # pool the output frame for a single feature vector
         x = self.avg_pool(x)
@@ -176,12 +174,11 @@ class Model(nn.Module):
                 dropout=self.conf['dropout'][i],
                 importance=self.conf['importance'],
                 graph=self.A,
-                rank=self.rank,
                 normalization=self.normalization)
             for i in range(self.conf['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
-        new_st_gcn = nn.Sequential(*stack)
+        new_st_gcn = nn.ModuleList(stack)
 
         # copy parameters from the batch trained model into the RT version
         # user must ensure that all necessary updates are made on conversion between the two different architectures
@@ -196,8 +193,8 @@ class Model(nn.Module):
     def eval_(self):
         for module in self.st_gcn: module.eval_()
         return
-    
-    
+
+
     def prepare_dict():
         return {
             "float_to_observed_custom_module_class": {
@@ -206,7 +203,7 @@ class Model(nn.Module):
                 }
             }
         }
-    
+
 
     def convert_dict():
         return {
@@ -261,7 +258,6 @@ class OfflineLayer(nn.Module):
         residual,
         importance,
         graph,
-        rank,
         normalization='LayerNorm'):
         """
         Args:
@@ -301,15 +297,15 @@ class OfflineLayer(nn.Module):
         self.num_joints = num_joints
         self.stride = stride
         self.kernel_size = kernel_size
-        self.rank = rank
 
         self.out_channels = out_channels
 
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
-        self.A = graph.clone().detach()
+        # self.A = graph.clone().detach()
+        # self.A = graph
 
         # learnable edge importance weighting matrices (each layer, separate weighting)
-        self.edge_importance = nn.Parameter(torch.ones(num_partitions,num_joints,num_joints,device=rank), requires_grad=True) if importance else 1
+        self.edge_importance = nn.Parameter(torch.ones(num_partitions, num_joints, num_joints), requires_grad=True) if importance else 1
 
         # convolution of incoming frame
         # (out_channels is a multiple of the partition number
@@ -342,8 +338,10 @@ class OfflineLayer(nn.Module):
                 nn.Dropout(dropout))
 
 
-    def forward(self, x):
+    def forward(self, x, A):
         _,_,L,_ = x.size()
+        device = x.get_device()
+
         # residual branch
         res = self.residual(x)
 
@@ -361,18 +359,18 @@ class OfflineLayer(nn.Module):
         # (N,C,L,V,P) -> (N,L,P,C,V)
         x = x.permute(0,2,4,1,3)
         # single multiplication with the adjacency matrices (spatial selective addition, across partitions) 
-        x = torch.matmul(x, self.A*self.edge_importance)
+        x = torch.matmul(x, A*self.edge_importance)
 
         # TODO: replace with unfold -> fold calls
         # Toeplitz matrix for temporal accumulation that mimics FIFO behavior, but in batch on full sequence
-        toeplitz = torch.zeros(L, L, device=self.rank)
+        toeplitz = torch.zeros(L, L, device=device)
         for i in range(self.kernel_size//self.stride):
             toeplitz += F.pad(
                 torch.eye(
                     L - self.stride * i,
-                    device=self.rank),
+                    device=device),
                 (i*self.stride,0,0,i*self.stride))
-        
+
         # sum temporally by multiplying features with the Toeplitz matrix
         # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L) 
         x = x.permute(0,2,3,4,1)
@@ -432,7 +430,6 @@ class OnlineLayer(nn.Module):
         residual,
         importance,
         graph,
-        rank,
         normalization='LayerNorm'):
         """
         Args:
@@ -481,7 +478,7 @@ class OnlineLayer(nn.Module):
 
         # learnable edge importance weighting matrices (each layer, separate weighting)
         # just a placeholder for successful load_state_dict() from <StgcnLayer>._swap_layers_for_inference()
-        self.edge_importance = nn.Parameter(torch.ones(num_partitions,num_joints,num_joints,device=rank), requires_grad=False) if importance else 1
+        self.edge_importance = nn.Parameter(torch.ones(num_partitions, num_joints, num_joints), requires_grad=False) if importance else 1
 
         # convolution of incoming frame
         # (out_channels is a multiple of the partition number
