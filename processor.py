@@ -28,14 +28,14 @@ def _build_model(Model, rank, args):
 
     model = Model(rank=rank, **args.arch)
 
+    # load the checkpoint if not trained from scratch
+    if args.processor.get('checkpoint'):
+        state = torch.load(args.processor['checkpoint'], map_location=rank)
+        model.load_state_dict(state['model_state_dict'])
+
     if torch.cuda.device_count() > 1:
         model = DP(model)
     model.to(rank)
-
-    # load the checkpoint if not trained from scratch
-    if args.processor.get('checkpoint'):        
-        state = torch.load(args.processor['checkpoint'], map_location=rank)
-        model.module.load_state_dict(state['model_state_dict'])
 
     return model
 

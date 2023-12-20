@@ -348,17 +348,17 @@ class OfflineLayer(nn.Module):
         # spatial convolution of incoming frame (node-wise)
         x = self.conv(x)
 
-        # convert to the expected dimension order and add the partition dimension 
+        # convert to the expected dimension order and add the partition dimension
         # reshape the tensor for multiplication with the adjacency matrix
-        # (convolution output contains all partitions, stacked across the channel dimension) 
-        # split into separate 4D tensors, each corresponding to a separate partition 
+        # (convolution output contains all partitions, stacked across the channel dimension)
+        # split into separate 4D tensors, each corresponding to a separate partition
         x = torch.split(x, self.out_channels, dim=1)
         # concatenate these 4D tensors across the partition dimension
         x = torch.stack(x, -1)
-        # change the dimension order for the correct broadcating of the adjacency matrix 
+        # change the dimension order for the correct broadcating of the adjacency matrix
         # (N,C,L,V,P) -> (N,L,P,C,V)
         x = x.permute(0,2,4,1,3)
-        # single multiplication with the adjacency matrices (spatial selective addition, across partitions) 
+        # single multiplication with the adjacency matrices (spatial selective addition, across partitions)
         x = torch.matmul(x, A*self.edge_importance)
 
         # TODO: replace with unfold -> fold calls
@@ -372,7 +372,7 @@ class OfflineLayer(nn.Module):
                 (i*self.stride,0,0,i*self.stride))
 
         # sum temporally by multiplying features with the Toeplitz matrix
-        # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L) 
+        # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L)
         x = x.permute(0,2,3,4,1)
         x = torch.matmul(x, toeplitz)
         # sum across partitions (N,C,V,L)
@@ -459,7 +459,7 @@ class OnlineLayer(nn.Module):
                 If ``True``, applies a residual connection.
 
             fifo_latency : ``bool``
-                If ``True``, residual connection adds ``x_{t}`` frame to ``y_{t}`` (which adds ``ceil(kernel_size/2)`` latency), 
+                If ``True``, residual connection adds ``x_{t}`` frame to ``y_{t}`` (which adds ``ceil(kernel_size/2)`` latency),
                 otherwise adds ``x_{t}`` frame to ``y_{t-ceil(kernel_size/2)}``.
         """
 

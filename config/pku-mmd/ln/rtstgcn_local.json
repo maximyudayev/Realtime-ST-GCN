@@ -17,7 +17,7 @@
         "stages": 1,
         "kernel": 9,
         "output_type": "logits",
-        "normalization": "BatchNorm",
+        "normalization": "LayerNorm",
         "rt-st-gcn": {
             "latency": false,
             "importance": true,
