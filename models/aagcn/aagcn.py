@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.utils import Graph, LayerNorm, BatchNorm1d
 from models.stgcn.stgcn import StgcnLayer
+from torch.utils.checkpoint import checkpoint
 
 
 class Model(nn.Module):
@@ -22,15 +23,14 @@ class Model(nn.Module):
         spatial_kernel_size = kwargs['graph']['num_node']
         temporal_kernel_size = conf['kernel']
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
-        
-        self.segment = kwargs['segment']
+
         self.num_classes = kwargs['num_classes']
 
         self.streams = nn.ModuleList([nn.ModuleDict({
             "norm_in": LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False),
             "fcn_in": nn.Conv2d(
-                in_channels=conf['in_feat'], 
-                out_channels=conf['in_ch'][0], 
+                in_channels=conf['in_feat'],
+                out_channels=conf['in_ch'][0],
                 kernel_size=1),
             "gcn_networks": nn.ModuleList([
                 AgcnLayer(
@@ -60,10 +60,11 @@ class Model(nn.Module):
 
 
     def forward(self, x_joint):
+        N,_,_,_ = x_joint.size()
         device = x_joint.get_device()
 
         # placeholder for model's output between two streams
-        output = torch.zeros(self.segment, self.num_classes, 1, device=device)
+        output = torch.zeros(N, self.num_classes, 1, device=device)
 
         # turns joint coordinates into bone coordinate vectors, pointing from source to target joint
         # gets the "far" immediately-connected joints per each joint (row)
@@ -81,11 +82,11 @@ class Model(nn.Module):
 
             # remap the features to the network size
             data = modules['fcn_in'](data)
-            
+
             # forward pass through GCN layers
             for gcn in modules['gcn_networks']:
-                data = gcn(data, self.A)
-            
+                data = checkpoint(gcn, data, self.A)
+
             # global pooling (across time L, and nodes V)
             data = F.avg_pool2d(data, data.size()[2:])
 
@@ -101,12 +102,12 @@ class Model(nn.Module):
 class AgcnLayer(nn.Module):
     def __init__(
         self,
-        in_channels, 
-        out_channels, 
-        kernel_size, 
-        partitions, 
-        stride, 
-        residual, 
+        in_channels,
+        out_channels,
+        kernel_size,
+        partitions,
+        stride,
+        residual,
         dropout,
         num_joints,
         importance,
@@ -147,7 +148,7 @@ class AgcnLayer(nn.Module):
         phi = self.phi(x).view(N, self.partitions, self.embedding_channels*L, self.num_joints)
         # (N,P,V,V)
         C = F.softmax(torch.matmul(theta, phi), dim=3)
-        
+
         # graph convolution
         x = self.st_gcn(x, A+self.B+C)
 

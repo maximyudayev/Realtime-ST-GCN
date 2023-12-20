@@ -28,7 +28,7 @@ class Model(nn.Module):
             :math:`M_{in}` is the number of instance in a frame.
     """
 
-    def __init__(self, rank, **kwargs):
+    def __init__(self, **kwargs):
         super(Model, self).__init__()
 
         conf = kwargs['st-gcn']
@@ -42,7 +42,7 @@ class Model(nn.Module):
         spatial_kernel_size = kwargs['graph']['num_node']
         temporal_kernel_size = conf['kernel']
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
-        
+
         self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
 
         # fcn for feature remapping of input to the network size
@@ -86,7 +86,7 @@ class Model(nn.Module):
 
         # forward
         for gcn, importance in zip(self.gcn_networks, self.edge_importance):
-            x = gcn(x, self.A * importance)
+            x = checkpoint(gcn, x, self.A * importance)
 
         # global pooling (across time L, and nodes V)
         x = F.avg_pool2d(x, x.size()[2:])
@@ -137,7 +137,7 @@ class StgcnLayer(nn.Module):
         padding = (((kernel_size[0] - 1) // 2), 0)
 
         self.gcn = ConvTemporalGraphical(
-            in_channels, 
+            in_channels,
             out_channels,
             kernel_size[1],
             partitions)
@@ -178,4 +178,3 @@ class StgcnLayer(nn.Module):
         x = self.tcn(x)
 
         return self.relu(x + res)
-        

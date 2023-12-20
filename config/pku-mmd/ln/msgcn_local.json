@@ -1,12 +1,11 @@
 {
     "processor": {
         "model": "ms-gcn",
-        "data": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1",
+        "data": "data/pku-mmdv1",
         "dataset_type": "dir",
-        "out": "/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
-        "backup": "/data/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
-        "actions": "/data/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1/actions.txt",
-        "graph": "/data/leuven/341/vsc34153/rt-st-gcn/data/skeletons/pku-mmd.json",
+        "out": "pretrained_models/pku-mmdv1",
+        "actions": "data/pku-mmdv1/actions.txt",
+        "graph": "data/skeletons/pku-mmd.json",
         "demo": [175,293,37],
         "iou_threshold": [0.1,0.25,0.5]
     },
@@ -17,7 +16,7 @@
         "stages": 4,
         "refine": "softmax",
         "output_type": "logits",
-        "normalization": "BatchNorm",
+        "normalization": "LayerNorm",
         "st-gcn": {
             "latency": false,
             "importance": true,
@@ -43,7 +42,7 @@
     },
     "optimizer": {
         "seed": 1538574472,
-        "epochs": 1,
+        "epochs": 50,
         "checkpoint_indices": [
             0,1,2,3,4,5,6,7,8,9,
             10,11,12,13,14,15,16,17,18,19,
@@ -57,7 +56,7 @@
             90,91,92,93,94,95,96,97,98],
         "learning_rate": 0.0005,
         "learning_rate_decay": 1.0,
-        "batch_size": 64
+        "batch_size": 16
     },
     "job": {
         "email": "maxim.yudayev@kuleuven.be",

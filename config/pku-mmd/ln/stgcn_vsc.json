@@ -1,6 +1,6 @@
 {
     "processor": {
-        "model": "ms-gcn",
+        "model": "st-gcn",
         "data": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1",
         "dataset_type": "dir",
         "out": "/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
@@ -14,10 +14,9 @@
         "strategy": "spatial",
         "receptive_field": 50,
         "in_feat": 3,
-        "stages": 4,
-        "refine": "softmax",
+        "stages": 1,
         "output_type": "logits",
-        "normalization": "BatchNorm",
+        "normalization": "LayerNorm",
         "st-gcn": {
             "latency": false,
             "importance": true,
@@ -28,17 +27,8 @@
             "in_ch": [64,64,64,64,128,128,128,256,256],
             "out_ch": [64,64,64,128,128,128,256,256,256],
             "stride": [1,1,1,2,1,1,2,1,1],
-            "residual": [1,1,1,1,1,1,1,1,1],
+            "residual":[1,1,1,1,1,1,1,1,1],
             "dropout": [0,0,0,0,0,0,0,0,0]
-        },
-        "ms-tcn": {
-            "latency": false,
-            "importance": true,
-            "stages": 3,
-            "layers": [10,10,10],
-            "kernel": [3,3,3],
-            "filters": [64,64,64],
-            "dropout": [0,0,0]
         }
     },
     "optimizer": {

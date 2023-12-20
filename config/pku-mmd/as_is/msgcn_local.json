@@ -16,7 +16,7 @@
         "stages": 4,
         "refine": "softmax",
         "output_type": "logits",
-        "normalization": "LayerNorm",
+        "normalization": "BatchNorm",
         "st-gcn": {
             "latency": false,
             "importance": true,

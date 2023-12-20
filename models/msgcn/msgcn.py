@@ -26,7 +26,7 @@ class Model(nn.Module):
                 num_layers=conf['layers'][i],
                 kernel=conf['kernel'][i],
                 dropout=conf['dropout'][i]) for i in range(conf['stages'])])
-        
+
         if kwargs['refine']=='logits':
             self.probability = lambda x: x
         elif kwargs['refine']=='logsoftmax':
@@ -43,10 +43,10 @@ class Model(nn.Module):
 
 
     def forward(self, x):
-        _,_,L,_ = x.size()
+        N,_,_,_ = x.size()
         device = x.get_device()
 
-        outputs = torch.zeros(self.stages, 1, self.num_classes, L, device=device)
+        outputs = torch.zeros(self.stages, 1, self.num_classes, N, device=device)
 
         x = self.generator_stage(x)
         # (N,C,1) -> (1,C,L,1) | N=L

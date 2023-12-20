@@ -16,7 +16,7 @@
         "in_feat": 3,
         "stages": 1,
         "output_type": "logits",
-        "normalization": "LayerNorm",
+        "normalization": "BatchNorm",
         "st-gcn": {
             "latency": false,
             "importance": true,
