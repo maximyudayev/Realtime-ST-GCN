@@ -155,7 +155,7 @@ def setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args):
 
     # construct the target model using the user's CLI arguments
     model = _build_model(Model, rank, args)
-    
+
     loss = Loss(rank, train_class_dist, args.arch['output_type'])
     segment_generator = SegmentGenerator(rank=rank, world_size=world_size, **args.arch)
     statistics = Statistics()
@@ -310,13 +310,13 @@ class Processor:
         labels):
         """Generator that does the forward pass on the model.
 
-        If `dataset_type` is `'dir'`, processes 1 trial at a time, chops each sequence 
+        If `dataset_type` is `'dir'`, processes 1 trial at a time, chops each sequence
         into equal segments that are split across available executors (GPUs) for parallel computation.
 
         If `model` is `'original'` and `latency` is `True`, applies the original classification model
-        on non-overlapping windows of size `receptive_field` over the input stream, producing outputs at a 
+        on non-overlapping windows of size `receptive_field` over the input stream, producing outputs at a
         reduced temporal resolution inversely proportional to the size of the window. Trades prediction
-        resolution for compute (does not compute redundant values for input frames otherwise overlapped by 
+        resolution for compute (does not compute redundant values for input frames otherwise overlapped by
         multiple windows).
 
         TODO: provide different stride settings for the original model (not only the extremas).
@@ -418,7 +418,7 @@ class Processor:
                 if k == num_samples: break
 
                 top1_predicted, _, _, top1_cor, top5_cor, tot, ce, mse, lat = foo(captures, labels)
-                # epoch loss has to multiply by minibatch size to get total non-averaged loss, 
+                # epoch loss has to multiply by minibatch size to get total non-averaged loss,
                 # which will then be averaged across the entire dataset size, since
                 # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
                 # (used for statistics)
@@ -558,14 +558,13 @@ class Processor:
         ce_loss_val_list = []
         mse_loss_val_list = []
         epoch_loss_val_list = []
-        
+
         start_time = time.time()
         print("Training started", flush=True, file=job_conf["log"][0])
 
         # train the model for num_epochs
         # (dataloader is automatically shuffled after each epoch)
         for epoch in range_epochs:
-
             # set layers to training mode if behavior of any differs between train and prediction
             # (prepares Dropout and BatchNormalization layers to disable and to learn parameters, respectively)
             self.model.train()
@@ -602,7 +601,7 @@ class Processor:
             if (epoch in optim_conf['checkpoint_indices']):
                 torch.save({
                     "epoch": epoch,
-                    "model_state_dict": self.model.module.state_dict(),
+                    "model_state_dict": self.model.module.state_dict() if torch.cuda.device_count() > 1 else self.model.state_dict(),
                     "optimizer_state_dict": self.optimizer.state_dict(),
                     "loss": loss_train.sum() / len(train_dataloader),
                     }, "{0}/epoch-{1}.pt".format(proc_conf['save_dir'], epoch))
@@ -625,7 +624,7 @@ class Processor:
                 .format(self.rank),
                 flush=True,
                 file=job_conf['log'][0])
-            
+
             loss_val = torch.tensor([ce_epoch_loss_val, mse_epoch_loss_val], device=self.rank)
             top1_acc_val = torch.tensor([top1_acc_val], device=self.rank)
             top5_acc_val = torch.tensor([top5_acc_val], device=self.rank)
@@ -659,7 +658,7 @@ class Processor:
             self._save_metrics(proc_conf['save_dir'], None)
 
             self._demo_segmentation_masks(
-                dataloader=val_dataloader, 
+                dataloader=val_dataloader,
                 suffix=None,
                 demo=proc_conf['demo'],
                 save_dir=proc_conf['save_dir'])
@@ -733,7 +732,7 @@ class Processor:
         # save the final model
         torch.save({
             "epoch": epoch,
-            "model_state_dict": self.model.module.state_dict(),
+            "model_state_dict": self.model.module.state_dict() if torch.cuda.device_count() > 1 else self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "loss": loss_train.sum() / len(train_dataloader),
             }, "{0}/final.pt".format(proc_conf['save_dir']))
@@ -772,7 +771,7 @@ class Processor:
         loss_val = torch.tensor([ce_epoch_loss_val, mse_epoch_loss_val], device=self.rank)
         top1_acc_val = torch.tensor([top1_acc_val], device=self.rank)
         top5_acc_val = torch.tensor([top5_acc_val], device=self.rank)
-        
+
         self._reduce_metrics()
 
         # save all metrics
@@ -781,7 +780,7 @@ class Processor:
         self._save_metrics(proc_conf['save_dir'], None)
 
         self._demo_segmentation_masks(
-            dataloader=dataloader, 
+            dataloader=dataloader,
             suffix=None,
             demo=proc_conf['demo'],
             save_dir=proc_conf['save_dir'])
@@ -845,9 +844,9 @@ class Processor:
         # TODO: extend to other models and call using meaningful common method name
         self.model._swap_layers_for_inference()
         self.model.eval_()
-        
+
         self.model.eval()
-        
+
         # measure FP32 latency on CPU
         _, _, _, _, latency_fp32 = self._test(
             dataloader=dataloader,
@@ -866,7 +865,7 @@ class Processor:
         # prepare the FP32 model: attaches observers to all layers, including the custom layer
         qconfig = torch.ao.quantization.get_default_qconfig_mapping(proc_conf['backend'])
         self.model = prepare_fx(self.model, qconfig_mapping=qconfig, example_inputs=torch.randn(1,3,1,25), prepare_custom_config=arch_conf['prepare_dict'])
-        
+
         # calibrate the observed model (must be done on the same device as training)
         top1_acc_cal, top5_acc_cal, ce_epoch_loss_cal, mse_epoch_loss_cal, _ = self._test(
             dataloader=dataloader,
@@ -912,7 +911,7 @@ class Processor:
         self._save_metrics(proc_conf['save_dir'], "_int8")
 
         self._demo_segmentation_masks(
-            dataloader=dataloader, 
+            dataloader=dataloader,
             suffix="_int8",
             demo=proc_conf["demo"],
             save_dir=proc_conf['save_dir'])
