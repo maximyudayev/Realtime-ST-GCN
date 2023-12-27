@@ -7,6 +7,7 @@
         "backup": "/data/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
         "actions": "/data/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1/actions.txt",
         "graph": "/data/leuven/341/vsc34153/rt-st-gcn/data/skeletons/pku-mmd.json",
+        "checkpoint": "/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1/train_20-12-23-20:36:41_pkummd_mstcn_asis/epoch-75.pt",
         "demo": [175,293,37],
         "iou_threshold": [0.1,0.25,0.5]
     },

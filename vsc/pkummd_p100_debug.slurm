@@ -2,8 +2,8 @@
 #SBATCH -A lp_stadius_fpga_ai
 #SBATCH --cluster=genius
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=9
-#SBATCH --gpus-per-node=1
+#SBATCH --ntasks-per-node=36
+#SBATCH --gpus-per-node=4
 #SBATCH --partition=gpu_p100_debug
 #SBATCH --mem-per-cpu=5000
 #SBATCH --output=debug/%x.out

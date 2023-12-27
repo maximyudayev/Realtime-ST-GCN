@@ -84,9 +84,8 @@ class WindowSegment(Segment):
 
 class WindowSegmentMultiStage(WindowSegment):
     def mask_segment(self, L, P_start, P_end, predictions):
-        # arrange tensor back into a time series
-        # (M,N',C',1)->(M,N,L,C')->(M,N,C',L)
-        return predictions.view(self.num_stages, 1, self.S, self.num_classes).permute(0,1,3,2)
+        # (M,N,C,L)
+        return predictions
 
 
 class WindowSegmentOneToOneMultiStage(Segment):

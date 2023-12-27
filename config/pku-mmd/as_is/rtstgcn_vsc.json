@@ -10,7 +10,7 @@
         "demo": [175,293,37],
         "iou_threshold": [0.1,0.25,0.5],
         "backend": "x86",
-	"checkpoint": "/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1/train_19-12-23-23:39:14_pkummd_rtstgcn_bn/final.pt"
+	"checkpoint": "/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1/train_20-12-23-20:14:33_pkummd_rtstgcn_bn/epoch-97.pt"
     },
     "arch": {
         "strategy": "spatial",

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.utils import ConvTemporalGraphical, Graph, LayerNorm, BatchNorm1d
-from torch.utils.checkpoint import checkpoint
+# from torch.utils.checkpoint import checkpoint
 
 
 class Model(nn.Module):
@@ -86,7 +86,8 @@ class Model(nn.Module):
 
         # forward
         for gcn, importance in zip(self.gcn_networks, self.edge_importance):
-            x = checkpoint(gcn, x, self.A * importance)
+            # x = checkpoint(gcn, x, self.A * importance)
+            x = gcn(x, self.A * importance)
 
         # global pooling (across time L, and nodes V)
         x = F.avg_pool2d(x, x.size()[2:])

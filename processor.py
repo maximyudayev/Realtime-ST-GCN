@@ -6,6 +6,7 @@ from torch.nn import DataParallel as DP
 
 from torch.utils.data import DataLoader
 from data_prep import SkeletonDataset, SkeletonDatasetFromDirectory
+from models import MsGcn
 
 from torch.ao.quantization.quantize_fx import prepare_fx, convert_fx
 
@@ -28,14 +29,20 @@ def _build_model(Model, rank, args):
 
     model = Model(rank=rank, **args.arch)
 
+    if torch.cuda.device_count() > 1 and not isinstance(model, MsGcn):
+        model = DP(model)
+
+    model.to(rank)
+
     # load the checkpoint if not trained from scratch
     if args.processor.get('checkpoint'):
         state = torch.load(args.processor['checkpoint'], map_location=rank)
-        model.load_state_dict(state['model_state_dict'])
-
-    if torch.cuda.device_count() > 1:
-        model = DP(model)
-    model.to(rank)
+        if torch.cuda.device_count() > 1:
+            model.load_state_dict({
+                'module.'+k: v
+                for k,v in state['model_state_dict'].items()})
+        else:
+            model.load_state_dict(state['model_state_dict'])
 
     return model
 
@@ -350,7 +357,7 @@ class Processor:
         # calculate the predictions statistics
         top1_predicted, top5_predicted, top1_cor, top5_cor, tot = self.statistics(predictions, labels)
 
-        # lazy yield statistics for each segment of the trial
+        # statistics for each segment of the trial
         return top1_predicted, top5_predicted, labels, top1_cor, top5_cor, tot, ce, mse, None
 
 
@@ -502,8 +509,6 @@ class Processor:
                 file=log[0])
 
             # backward pass to compute the gradients
-            # NOTE: after each `backward()`, gradients are synchronized across ranks to ensure same state prior to optimization.
-            # each rank contributes `1/world_size` to the gradient calculation
             loss.backward()
 
             # zero the gradient buffers after every batch

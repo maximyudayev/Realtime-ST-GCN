@@ -60,12 +60,6 @@ class Model(nn.Module):
 
 
     def forward(self, x_joint):
-        N,_,_,_ = x_joint.size()
-        device = x_joint.get_device()
-
-        # placeholder for model's output between two streams
-        output = torch.zeros(N, self.num_classes, 1, device=device)
-
         # turns joint coordinates into bone coordinate vectors, pointing from source to target joint
         # gets the "far" immediately-connected joints per each joint (row)
         A_far = self.graph.get_adjacency_raw()[2].astype(bool)
@@ -76,27 +70,31 @@ class Model(nn.Module):
             x_bone[:,:,:,A_far[i]] = x_joint[:,:,:,A_far[i]] - x_joint[:,:,:,i,None]
 
         # pass both streams through the coresponding branch and add prediction probabilities
-        for data, modules in zip((x_joint, x_bone), self.streams):
-            # normalize inputs
-            data = modules['norm_in'](data)
+        x_joint = self.streams[0]['norm_in'](x_joint)
+        # remap the features to the network size
+        x_joint = self.streams[0]['fcn_in'](x_joint)
+        # forward pass through GCN layers
+        for gcn in self.streams[0]['gcn_networks']:
+            x_joint = gcn(x_joint, self.A)
+        # global pooling (across time L, and nodes V)
+        x_joint = F.avg_pool2d(x_joint, x_joint.size()[2:])
+        # prediction
+        x_joint = checkpoint(self.streams[0]['fcn_out'], x_joint)
 
-            # remap the features to the network size
-            data = modules['fcn_in'](data)
+        # pass both streams through the coresponding branch and add prediction probabilities
+        x_bone = self.streams[1]['norm_in'](x_bone)
+        # remap the features to the network size
+        x_bone = self.streams[1]['fcn_in'](x_bone)
+        # forward pass through GCN layers
+        for gcn in self.streams[1]['gcn_networks']:
+            x_bone = gcn(x_bone, self.A)
+        # global pooling (across time L, and nodes V)
+        x_bone = F.avg_pool2d(x_bone, x_bone.size()[2:])
+        # prediction
+        x_bone = self.streams[1]['fcn_out'](x_bone)
 
-            # forward pass through GCN layers
-            for gcn in modules['gcn_networks']:
-                data = checkpoint(gcn, data, self.A)
-
-            # global pooling (across time L, and nodes V)
-            data = F.avg_pool2d(data, data.size()[2:])
-
-            # prediction
-            data = modules['fcn_out'](data)
-
-            # NOTE: original 2s-AGCN sums probabilities of both streams, not logits
-            output += self.probability(data.squeeze(-1))
-
-        return output
+        # NOTE: original 2s-AGCN sums probabilities of both streams, not logits
+        return self.probability(x_bone.squeeze(-1)) + self.probability(x_joint.squeeze(-1))
 
 
 class AgcnLayer(nn.Module):
