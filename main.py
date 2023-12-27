@@ -39,7 +39,7 @@ def assert_parameters(args):
     return None
 
 
-def train(rank, world_size, args):
+def train(world_size, args):
     """Entry point for training a single selected model.
 
     Args:
@@ -53,20 +53,22 @@ def train(rank, world_size, args):
             Parsed CLI arguments.
     """
 
+    output_device = world_size-1
+
     # return reference to the user selected model constructor
     Model, Loss, SegmentGenerator, Statistics = pick_model(args)
 
     # perform common setup around the model's black box
-    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args)
+    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, world_size, args)
 
     # list metrics that Processor should record
     metrics = [
-        F1Score(rank, args.arch['num_classes'], args.processor['iou_threshold']),
-        EditScore(rank, args.arch['num_classes']),
-        ConfusionMatrix(rank, args.arch['num_classes'])]
+        F1Score(output_device, args.arch['num_classes'], args.processor['iou_threshold']),
+        EditScore(output_device, args.arch['num_classes']),
+        ConfusionMatrix(output_device, args.arch['num_classes'])]
 
     # construct a processing wrapper
-    processor = Processor(rank, world_size, model, loss, statistics, segment_generator, metrics)
+    processor = Processor(world_size, model, loss, statistics, segment_generator, metrics)
 
     # perform the training
     # (the model is trained on all skeletons in the scene, simultaneously)
@@ -102,7 +104,7 @@ def train(rank, world_size, args):
     return None
 
 
-def test(rank, world_size, args):
+def test(world_size, args):
     """Entry point for testing performance of a single pretrained model.
 
     Args:
@@ -116,20 +118,22 @@ def test(rank, world_size, args):
             Parsed CLI arguments.
     """
 
+    output_device = world_size-1
+
     # return reference to the user selected model constructor
     Model, Loss, SegmentGenerator, Statistics = pick_model(args)
 
     # perform common setup around the model's black box
-    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args)
+    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, world_size, args)
 
     # list metrics that Processor should record
     metrics = [
-        F1Score(rank, args.arch['num_classes'], args.processor['iou_threshold']),
-        EditScore(rank, args.arch['num_classes']),
-        ConfusionMatrix(rank, args.arch['num_classes'])]
+        F1Score(output_device, args.arch['num_classes'], args.processor['iou_threshold']),
+        EditScore(output_device, args.arch['num_classes']),
+        ConfusionMatrix(output_device, args.arch['num_classes'])]
 
     # construct a processing wrapper
-    processor = Processor(rank, world_size, model, loss, statistics, segment_generator, metrics)
+    processor = Processor(world_size, model, loss, statistics, segment_generator, metrics)
 
     # perform the testing
     processor.test(
@@ -159,7 +163,7 @@ def test(rank, world_size, args):
     return None
 
 
-def benchmark(rank, world_size, args):
+def benchmark(world_size, args):
     """Entry point for benchmarking inference of a model, including quantization.
 
     TODO: add custom quantization conversion modules for other models
@@ -175,11 +179,13 @@ def benchmark(rank, world_size, args):
             Parsed CLI arguments.
     """
 
+    output_device = world_size-1
+
     # return reference to the user selected model constructor
     Model, Loss, SegmentGenerator, Statistics = pick_model(args)
 
     # perform common setup around the model's black box
-    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args)
+    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, world_size, args)
 
     # get custom quantization details if the model needs any
     # maps custom quantization replacement modules
@@ -188,12 +194,12 @@ def benchmark(rank, world_size, args):
 
     # list metrics that Processor should record
     metrics = [
-        F1Score(rank, args.arch['num_classes'], args.processor['iou_threshold']),
-        EditScore(rank, args.arch['num_classes']),
-        ConfusionMatrix(rank, args.arch['num_classes'])]
+        F1Score(output_device, args.arch['num_classes'], args.processor['iou_threshold']),
+        EditScore(output_device, args.arch['num_classes']),
+        ConfusionMatrix(output_device, args.arch['num_classes'])]
 
     # construct a processing wrapper
-    processor = Processor(rank, world_size, model, loss, statistics, segment_generator, metrics)
+    processor = Processor(world_size, model, loss, statistics, segment_generator, metrics)
 
     # perform the testing
     processor.benchmark(
@@ -235,15 +241,13 @@ def main(args):
     assert_parameters(args)
 
     # setting up random number generator for deterministic and meaningful benchmarking
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    world_size = torch.cuda.device_count()
     random.seed(args.optimizer['seed'])
     torch.manual_seed(args.optimizer['seed'])
     torch.cuda.manual_seed_all(args.optimizer['seed'])
     torch.backends.cudnn.deterministic = True
 
     # enter the appropriate command
-    args.func(device, (1 if world_size in [None, 0] else world_size), args)
+    args.func(args)
 
     return None
 

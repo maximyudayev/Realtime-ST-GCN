@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.stgcn import Model as Stgcn
 from models.mstcn.mstcn import SingleStage as MsTcnStage
-from torch.nn import DataParallel as DP
 
 
 class Model(nn.Module):
@@ -43,19 +42,15 @@ class Model(nn.Module):
         elif kwargs['output_type']=='softmax':
             self.out = lambda x: F.softmax(x, dim=1)
 
-        if torch.cuda.device_count() > 1:
-            self.generator_stage = DP(self.generator_stage)
-
 
     def forward(self, x):
         N,_,_,_ = x.size()
-        device = x.get_device()
 
-        outputs = torch.zeros(self.stages, 1, self.num_classes, N, device=device)
+        outputs = torch.zeros(self.stages, 1, self.num_classes, N, device=2)
 
         x = self.generator_stage(x)
         # (N,C,1) -> (1,C,L,1) | N=L
-        x = x.permute(2,1,0,3)
+        x = x.permute(2,1,0,3).to(2)
         outputs[0] = self.out(x[:,:,:,0])
 
         for i, stage in enumerate(self.refinement_stages):

@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.utils import ConvTemporalGraphical, Graph, LayerNorm, BatchNorm1d
-# from torch.utils.checkpoint import checkpoint
 
 
 class Model(nn.Module):
@@ -43,10 +42,10 @@ class Model(nn.Module):
         temporal_kernel_size = conf['kernel']
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
 
-        self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
+        self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)], device=0) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False, device=0)
 
         # fcn for feature remapping of input to the network size
-        self.fcn_in = nn.Conv2d(in_channels=conf['in_feat'], out_channels=conf['in_ch'][0], kernel_size=1)
+        self.fcn_in = nn.Conv2d(in_channels=conf['in_feat'], out_channels=conf['in_ch'][0], kernel_size=1, device=0)
 
         self.gcn_networks = nn.ModuleList([
             StgcnLayer(
@@ -58,14 +57,15 @@ class Model(nn.Module):
                 stride=conf['stride'][i],
                 residual=not not conf['residual'][i],
                 dropout=conf['dropout'][i],
-                normalization=kwargs['normalization'])
+                normalization=kwargs['normalization'],
+                device=0 if i < 5 else 1)
             for i in range(conf['layers'])])
 
         # initialize parameters for edge importance weighting
         if conf['importance']:
             self.edge_importance = nn.ParameterList([
-                nn.Parameter(torch.ones(self.A.size()))
-                for _ in self.gcn_networks
+                nn.Parameter(torch.ones(self.A.size(), device=0 if i < 5 else 1))
+                for i in self.gcn_networks
             ])
         else:
             self.edge_importance = [1] * len(self.gcn_networks)
@@ -74,10 +74,13 @@ class Model(nn.Module):
         self.fcn_out = nn.Conv2d(
             conf['out_ch'][-1],
             out_channels=kwargs['num_classes'],
-            kernel_size=1)
+            kernel_size=1,
+            device=1)
 
 
     def forward(self, x):
+        self.A.to(0)
+        
         # data normalization
         x = self.norm_in(x)
 
@@ -85,8 +88,10 @@ class Model(nn.Module):
         x = self.fcn_in(x)
 
         # forward
-        for gcn, importance in zip(self.gcn_networks, self.edge_importance):
-            # x = checkpoint(gcn, x, self.A * importance)
+        for i, (gcn, importance) in enumerate(zip(self.gcn_networks, self.edge_importance)):
+            if i == 5:
+                x.to(1)
+                self.A.to(1)
             x = gcn(x, self.A * importance)
 
         # global pooling (across time L, and nodes V)
@@ -129,7 +134,8 @@ class StgcnLayer(nn.Module):
         stride=1,
         dropout=0,
         residual=True,
-        normalization='LayerNorm'):
+        normalization='LayerNorm',
+        device=None):
 
         super().__init__()
 
@@ -141,18 +147,20 @@ class StgcnLayer(nn.Module):
             in_channels,
             out_channels,
             kernel_size[1],
-            partitions)
+            partitions,
+            device=device)
 
         self.tcn = nn.Sequential(
-            LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False),
+            LayerNorm([out_channels, 1, num_joints], device=device) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False, device=device),
             nn.ReLU(inplace=True),
             nn.Conv2d(
                 out_channels,
                 out_channels,
                 (kernel_size[0], 1),
                 stride=(stride, 1),
-                padding=padding),
-            LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False),
+                padding=padding,
+                device=device),
+            LayerNorm([out_channels, 1, num_joints], device=device) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False, device=device),
             nn.Dropout(dropout, inplace=True))
 
         if not residual:
@@ -165,8 +173,9 @@ class StgcnLayer(nn.Module):
                     in_channels,
                     out_channels,
                     kernel_size=1,
-                    stride=(stride, 1)),
-                LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False))
+                    stride=(stride, 1),
+                    device=device),
+                LayerNorm([out_channels, 1, num_joints], device=device) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False, device=device))
 
         self.relu = nn.ReLU(inplace=True)
 

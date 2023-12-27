@@ -6,7 +6,6 @@ from torch.nn import DataParallel as DP
 
 from torch.utils.data import DataLoader
 from data_prep import SkeletonDataset, SkeletonDatasetFromDirectory
-from models import MsGcn
 
 from torch.ao.quantization.quantize_fx import prepare_fx, convert_fx
 
@@ -16,7 +15,7 @@ import time
 import os
 
 
-def _build_model(Model, rank, args):
+def _build_model(Model, args):
     """Builds the selected ST-GCN model variant.
 
     Args:
@@ -27,22 +26,12 @@ def _build_model(Model, rank, args):
         PyTorch Model corresponding to the user-defined CLI parameters, configured as DDP if using GPUs.
     """
 
-    model = Model(rank=rank, **args.arch)
-
-    if torch.cuda.device_count() > 1 and not isinstance(model, MsGcn):
-        model = DP(model)
-
-    model.to(rank)
+    model = Model(**args.arch)
 
     # load the checkpoint if not trained from scratch
     if args.processor.get('checkpoint'):
-        state = torch.load(args.processor['checkpoint'], map_location=rank)
-        if torch.cuda.device_count() > 1:
-            model.load_state_dict({
-                'module.'+k: v
-                for k,v in state['model_state_dict'].items()})
-        else:
-            model.load_state_dict(state['model_state_dict'])
+        state = torch.load(args.processor['checkpoint'])
+        model.load_state_dict(state['model_state_dict'])
 
     return model
 
@@ -124,7 +113,7 @@ def _makedirs(args):
     return jobname, save_dir, backup_dir
 
 
-def setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args):
+def setup(Model, Loss, SegmentGenerator, Statistics, world_size, args):
     """Performs setup common to any ST-GCN model variant.
 
     Only needs to be invoked once for a given problem (train-test, benchmark, etc.). 
@@ -145,6 +134,8 @@ def setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args):
         Train and validation DataLoaders.
     """
 
+    output_device = world_size-1
+
     # construct dataloaders
     train_dataloader, val_dataloader = _build_dataloader(args)
 
@@ -157,14 +148,14 @@ def setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args):
     args.job['jobname'], args.processor['save_dir'], args.processor['backup_dir'] = _makedirs(args)
 
     # get class distribution
-    train_class_dist = _get_class_dist(train_dataloader, rank)
-    val_class_dist = _get_class_dist(val_dataloader, rank)
+    train_class_dist = _get_class_dist(train_dataloader, output_device)
+    val_class_dist = _get_class_dist(val_dataloader, output_device)
 
     # construct the target model using the user's CLI arguments
-    model = _build_model(Model, rank, args)
+    model = _build_model(Model, args)
 
-    loss = Loss(rank, train_class_dist, args.arch['output_type'])
-    segment_generator = SegmentGenerator(rank=rank, world_size=world_size, **args.arch)
+    loss = Loss(output_device, train_class_dist, args.arch['output_type'])
+    segment_generator = SegmentGenerator(world_size=world_size, **args.arch)
     statistics = Statistics()
 
     return model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args
@@ -194,7 +185,6 @@ class Processor:
 
     def __init__(
         self,
-        rank,
         world_size,
         model,
         loss,
@@ -227,7 +217,6 @@ class Processor:
                 List of metric class instances to collect during processing.
         """
 
-        self.rank = rank
         self.world_size = world_size
         self.model = model
         self.loss = loss
@@ -332,7 +321,7 @@ class Processor:
         # move both data to the compute device
         # (captures is a batch of full-length captures, label is a batch of ground truths)
         # (N,C,L,V)
-        captures, labels = captures.to(self.rank), labels.to(self.rank)
+        captures, labels = captures.to(0), labels.to(self.world_size-1)
 
         _, _, L, _ = captures.size()
 
@@ -567,6 +556,8 @@ class Processor:
         start_time = time.time()
         print("Training started", flush=True, file=job_conf["log"][0])
 
+        output_device = self.world_size-1
+
         # train the model for num_epochs
         # (dataloader is automatically shuffled after each epoch)
         for epoch in range_epochs:
@@ -590,14 +581,14 @@ class Processor:
 
             print(
                 "[rank {0}]: completed training"
-                .format(self.rank),
+                .format(output_device),
                 flush=True,
                 file=job_conf['log'][0])
 
-            loss_train = torch.tensor([ce_epoch_loss_train, mse_epoch_loss_train], device=self.rank)
-            top1_correct_train = torch.tensor([top1_correct_train], device=self.rank)
-            top5_correct_train = torch.tensor([top5_correct_train], device=self.rank)
-            total_train = torch.tensor([total_train], device=self.rank)
+            loss_train = torch.tensor([ce_epoch_loss_train, mse_epoch_loss_train], device=output_device)
+            top1_correct_train = torch.tensor([top1_correct_train], device=output_device)
+            top5_correct_train = torch.tensor([top5_correct_train], device=output_device)
+            total_train = torch.tensor([total_train], device=output_device)
 
             epoch_end_time = time.time()
             duration_train = epoch_end_time - epoch_start_time
@@ -606,7 +597,7 @@ class Processor:
             if (epoch in optim_conf['checkpoint_indices']):
                 torch.save({
                     "epoch": epoch,
-                    "model_state_dict": self.model.module.state_dict() if torch.cuda.device_count() > 1 else self.model.state_dict(),
+                    "model_state_dict": self.model.state_dict(),
                     "optimizer_state_dict": self.optimizer.state_dict(),
                     "loss": loss_train.sum() / len(train_dataloader),
                     }, "{0}/epoch-{1}.pt".format(proc_conf['save_dir'], epoch))
@@ -626,13 +617,13 @@ class Processor:
 
             print(
                 "[rank {0}]: completed testing"
-                .format(self.rank),
+                .format(output_device),
                 flush=True,
                 file=job_conf['log'][0])
 
-            loss_val = torch.tensor([ce_epoch_loss_val, mse_epoch_loss_val], device=self.rank)
-            top1_acc_val = torch.tensor([top1_acc_val], device=self.rank)
-            top5_acc_val = torch.tensor([top5_acc_val], device=self.rank)
+            loss_val = torch.tensor([ce_epoch_loss_val, mse_epoch_loss_val], device=output_device)
+            top1_acc_val = torch.tensor([top1_acc_val], device=output_device)
+            top5_acc_val = torch.tensor([top5_acc_val], device=output_device)
 
             # reduce metrics and gather to master if using DDP
             self._reduce_metrics()
@@ -737,7 +728,7 @@ class Processor:
         # save the final model
         torch.save({
             "epoch": epoch,
-            "model_state_dict": self.model.module.state_dict() if torch.cuda.device_count() > 1 else self.model.state_dict(),
+            "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "loss": loss_train.sum() / len(train_dataloader),
             }, "{0}/final.pt".format(proc_conf['save_dir']))

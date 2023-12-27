@@ -4,10 +4,11 @@ class BatchNorm1d(nn.Module):
     def __init__(
         self,
         features,
-        track_running_stats=False):
+        track_running_stats=False,
+        device=None):
 
         super().__init__()
-        self.norm = nn.BatchNorm1d(features, track_running_stats=track_running_stats)
+        self.norm = nn.BatchNorm1d(features, track_running_stats=track_running_stats, device=device)
 
 
     def forward(self, x):
