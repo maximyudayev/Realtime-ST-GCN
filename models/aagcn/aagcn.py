@@ -131,6 +131,7 @@ class AgcnLayer(nn.Module):
         self.embedding_channels = out_channels//coeff_embedding
         self.partitions = partitions
         self.num_joints = num_joints
+        self.device = device
 
         # fully-learnable adjacency matrix B, initialized as 0's
         self.B = nn.Parameter(torch.zeros(partitions, num_joints, num_joints, device=device), requires_grad=True) if importance else 1
@@ -162,6 +163,6 @@ class AgcnLayer(nn.Module):
         C = F.softmax(torch.matmul(theta, phi), dim=3)
 
         # graph convolution
-        x = self.st_gcn(x, A+self.B+C)
+        x = self.st_gcn(x, A.to(self.device)+self.B+C)
 
         return x

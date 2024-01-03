@@ -247,13 +247,13 @@ def main(args):
     torch.backends.cudnn.deterministic = True
 
     # enter the appropriate command
-    args.func(args)
+    args.func(torch.cuda.device_count(), args)
 
     return None
 
 
 if __name__ == '__main__':
-    # top-level custom CLI parser -> 
+    # top-level custom CLI parser ->
     parser = Parser(
         prog='main',
         description="""Script for continual human action recognition model processing.
@@ -280,7 +280,7 @@ if __name__ == '__main__':
         help='path to the NN config file. Must be the last argument if combined '
             'with other CLI arguments. Provides default values for all arguments, except --log '
             '(default: config/pku-mmd/stgcn_local.json)')
-    
+
     # test command parser
     parser_test = subparsers.add_parser(
         'test',

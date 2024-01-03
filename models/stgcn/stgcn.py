@@ -7,7 +7,7 @@ from models.utils import ConvTemporalGraphical, Graph, LayerNorm, BatchNorm1d
 class Model(nn.Module):
     """Original classification spatial temporal graph convolutional networks.
 
-    Data provision (batching, unfolding, etc.) is delegated to the caller. Model operates 
+    Data provision (batching, unfolding, etc.) is delegated to the caller. Model operates
     on frame-by-frame basis and only requires an input buffer supplied to in the size of
     the requested receptive field.
 
@@ -64,8 +64,8 @@ class Model(nn.Module):
         # initialize parameters for edge importance weighting
         if conf['importance']:
             self.edge_importance = nn.ParameterList([
-                nn.Parameter(torch.ones(self.A.size(), device=0 if i < 5 else 1))
-                for i in self.gcn_networks
+                nn.Parameter(torch.ones(self.A.size()))
+                for _ in self.gcn_networks
             ])
         else:
             self.edge_importance = [1] * len(self.gcn_networks)
@@ -79,8 +79,6 @@ class Model(nn.Module):
 
 
     def forward(self, x):
-        self.A.to(0)
-        
         # data normalization
         x = self.norm_in(x)
 
@@ -89,10 +87,10 @@ class Model(nn.Module):
 
         # forward
         for i, (gcn, importance) in enumerate(zip(self.gcn_networks, self.edge_importance)):
+            A = (self.A * importance).to(0 if i < 5 else 1)
             if i == 5:
                 x.to(1)
-                self.A.to(1)
-            x = gcn(x, self.A * importance)
+            x = gcn(x, A)
 
         # global pooling (across time L, and nodes V)
         x = F.avg_pool2d(x, x.size()[2:])

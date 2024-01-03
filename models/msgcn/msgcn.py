@@ -26,7 +26,7 @@ class Model(nn.Module):
                 num_filters=conf['filters'][i],
                 num_layers=conf['layers'][i],
                 kernel=conf['kernel'][i],
-                dropout=conf['dropout'][i]) for i in range(conf['stages'])])
+                dropout=conf['dropout'][i]) for i in range(conf['stages'])]).to(2)
 
         if kwargs['refine']=='logits':
             self.probability = lambda x: x

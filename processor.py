@@ -291,10 +291,7 @@ class Processor:
                 captures, labels = dataloader.dataset.__getitem__(i)
 
                 # move both data to the compute device
-                # (captures is a batch of full-length captures, label is a batch of ground truths)
-                captures, labels = captures[None].to(self.rank), labels[None].to(self.rank)
-
-                top1_predicted, _, _, _, _, _, _, _, _ = self._forward(captures, labels)
+                top1_predicted, _, _, _, _, _, _, _, _ = self._forward(captures[None], labels[None])
 
                 pd.DataFrame(torch.stack((labels[0], top1_predicted[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}{2}.csv'.format(save_dir, i, suffix if suffix is not None else ""))
         return None
@@ -529,7 +526,7 @@ class Processor:
 
         # load the optimizer checkpoint if not training from scratch
         if proc_conf.get('checkpoint'):
-            state = torch.load(proc_conf['checkpoint'], map_location=self.rank)
+            state = torch.load(proc_conf['checkpoint'])
             self.optimizer.load_state_dict(state['optimizer_state_dict'])
             range_epochs = range(state['epoch']+1, optim_conf['epochs'])
         else:

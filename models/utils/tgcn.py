@@ -24,7 +24,7 @@ class ConvTemporalGraphical(nn.Module):
             :math:`N` is a batch size,
             :math:`K` is the spatial kernel size, as :math:`K == kernel_size[1]`,
             :math:`T_{in}/T_{out}` is a length of input/output sequence,
-            :math:`V` is the number of graph nodes. 
+            :math:`V` is the number of graph nodes.
     """
 
     def __init__(
@@ -37,8 +37,9 @@ class ConvTemporalGraphical(nn.Module):
         t_stride=1,
         t_padding=0,
         t_dilation=1,
-        bias=True):
-        
+        bias=True,
+        device=None):
+
         super().__init__()
 
         self.out_channels = out_channels
@@ -52,17 +53,18 @@ class ConvTemporalGraphical(nn.Module):
             padding=(t_padding, 0),
             stride=(t_stride, 1),
             dilation=(t_dilation, 1),
-            bias=bias)
+            bias=bias,
+            device=device)
 
 
     def forward(self, x, A):
         """Broadcasted N-dimensional matrix multiplication with the 3D/4D adjacency matrix.
 
         Args:
-            x : ``Tensor[N, C, L, V]`` 
+            x : ``Tensor[N, C, L, V]``
                 Input data.
 
-            A : ``Tensor[N, P, V, V] | Tensor[P, V, V]`` 
+            A : ``Tensor[N, P, V, V] | Tensor[P, V, V]``
                 Adjacency matrix.
         """
 
@@ -77,4 +79,3 @@ class ConvTemporalGraphical(nn.Module):
         # (N,P,C*L,V)
         x = torch.sum(x, dim=1).view(N, self.out_channels, L, V)
         return x
-        
