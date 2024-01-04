@@ -2,8 +2,6 @@ import torch
 import torch.nn.functional as F
 from torch import optim
 
-from torch.nn import DataParallel as DP
-
 from torch.utils.data import DataLoader
 from data_prep import SkeletonDataset, SkeletonDatasetFromDirectory
 
@@ -113,7 +111,7 @@ def _makedirs(args):
     return jobname, save_dir, backup_dir
 
 
-def setup(Model, Loss, SegmentGenerator, Statistics, world_size, args):
+def setup(Model, Loss, SegmentGenerator, Statistics, output_device, args):
     """Performs setup common to any ST-GCN model variant.
 
     Only needs to be invoked once for a given problem (train-test, benchmark, etc.). 
@@ -134,8 +132,6 @@ def setup(Model, Loss, SegmentGenerator, Statistics, world_size, args):
         Train and validation DataLoaders.
     """
 
-    output_device = world_size-1
-
     # construct dataloaders
     train_dataloader, val_dataloader = _build_dataloader(args)
 
@@ -155,7 +151,7 @@ def setup(Model, Loss, SegmentGenerator, Statistics, world_size, args):
     model = _build_model(Model, args)
 
     loss = Loss(output_device, train_class_dist, args.arch['output_type'])
-    segment_generator = SegmentGenerator(world_size=world_size, **args.arch)
+    segment_generator = SegmentGenerator(output_device=output_device, **args.arch)
     statistics = Statistics()
 
     return model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args
@@ -185,7 +181,7 @@ class Processor:
 
     def __init__(
         self,
-        world_size,
+        output_device,
         model,
         loss,
         statistics,
@@ -198,8 +194,8 @@ class Processor:
             rank : ``int``
                 Local GPU rank.
 
-            world_size : ``int``
-                Number of total used GPUs.
+            output_device : ``int``
+                ID of output tensor GPU.
 
             model : ``torch.nn.Module``
                 Configured PyTorch model.
@@ -217,7 +213,7 @@ class Processor:
                 List of metric class instances to collect during processing.
         """
 
-        self.world_size = world_size
+        self.output_device = output_device
         self.model = model
         self.loss = loss
         self.statistics = statistics
@@ -318,7 +314,7 @@ class Processor:
         # move both data to the compute device
         # (captures is a batch of full-length captures, label is a batch of ground truths)
         # (N,C,L,V)
-        captures, labels = captures.to(0), labels.to(self.world_size-1)
+        captures, labels = captures.to(0), labels.to(self.output_device)
 
         _, _, L, _ = captures.size()
 
@@ -346,7 +342,8 @@ class Processor:
         # statistics for each segment of the trial
         return top1_predicted, top5_predicted, labels, top1_cor, top5_cor, tot, ce, mse, None
 
-
+    
+    # TODO: update the procedure for model parallel
     def _forward_rt(
         self,
         captures,
@@ -377,6 +374,7 @@ class Processor:
         return top1_predicted, top5_predicted, labels, top1_cor, top5_cor, tot, ce, mse, latency/L
 
 
+    # TODO: update the procedure for model parallel
     def _test(
         self,
         dataloader,
@@ -424,15 +422,15 @@ class Processor:
                 total += tot
 
                 print(
-                    "[rank {0}, trial {1}]: loss = {2}"
-                    .format(self.rank, k, ce+mse),
+                    "[trial {0}]: loss = {1}"
+                    .format(k, ce+mse),
                     flush=True,
                     file=log[0])
 
                 latency += lat if lat else 0
 
                 # collect user-defined evaluation metrics
-                self._collect_metrics(labels.to(self.rank), top1_predicted)
+                self._collect_metrics(labels.to(self.output_device), top1_predicted)
 
                 test_end_time = time.time()
                 duration = test_end_time - test_start_time
@@ -489,8 +487,8 @@ class Processor:
                 loss /= (len(dataloader) % batch_size)
 
             print(
-                "[rank {0}, trial {1}]: loss = {2}"
-                .format(self.rank, i, loss),
+                "[trial {0}]: loss = {1}"
+                .format(i, loss),
                 flush=True,
                 file=log[0])
 
@@ -553,8 +551,6 @@ class Processor:
         start_time = time.time()
         print("Training started", flush=True, file=job_conf["log"][0])
 
-        output_device = self.world_size-1
-
         # train the model for num_epochs
         # (dataloader is automatically shuffled after each epoch)
         for epoch in range_epochs:
@@ -577,15 +573,14 @@ class Processor:
                 log=job_conf['log'])
 
             print(
-                "[rank {0}]: completed training"
-                .format(output_device),
+                "completed training",
                 flush=True,
                 file=job_conf['log'][0])
 
-            loss_train = torch.tensor([ce_epoch_loss_train, mse_epoch_loss_train], device=output_device)
-            top1_correct_train = torch.tensor([top1_correct_train], device=output_device)
-            top5_correct_train = torch.tensor([top5_correct_train], device=output_device)
-            total_train = torch.tensor([total_train], device=output_device)
+            loss_train = torch.tensor([ce_epoch_loss_train, mse_epoch_loss_train], device=self.output_device)
+            top1_correct_train = torch.tensor([top1_correct_train], device=self.output_device)
+            top5_correct_train = torch.tensor([top5_correct_train], device=self.output_device)
+            total_train = torch.tensor([total_train], device=self.output_device)
 
             epoch_end_time = time.time()
             duration_train = epoch_end_time - epoch_start_time
@@ -613,14 +608,13 @@ class Processor:
                 log=job_conf['log'])
 
             print(
-                "[rank {0}]: completed testing"
-                .format(output_device),
+                "completed testing",
                 flush=True,
                 file=job_conf['log'][0])
 
-            loss_val = torch.tensor([ce_epoch_loss_val, mse_epoch_loss_val], device=output_device)
-            top1_acc_val = torch.tensor([top1_acc_val], device=output_device)
-            top5_acc_val = torch.tensor([top5_acc_val], device=output_device)
+            loss_val = torch.tensor([ce_epoch_loss_val, mse_epoch_loss_val], device=self.output_device)
+            top1_acc_val = torch.tensor([top1_acc_val], device=self.output_device)
+            top5_acc_val = torch.tensor([top5_acc_val], device=self.output_device)
 
             # reduce metrics and gather to master if using DDP
             self._reduce_metrics()
@@ -735,6 +729,7 @@ class Processor:
         return None
 
 
+    # TODO: update procedure for model parallel
     def test(
         self,
         dataloader,
@@ -819,6 +814,7 @@ class Processor:
         return None
 
 
+    # TODO: update procedure for model parallel
     def benchmark(
         self,
         dataloader,

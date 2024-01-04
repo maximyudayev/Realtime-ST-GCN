@@ -47,6 +47,8 @@ class Model(nn.Module):
         # fcn for feature remapping of input to the network size
         self.fcn_in = nn.Conv2d(in_channels=conf['in_feat'], out_channels=conf['in_ch'][0], kernel_size=1, device=0)
 
+        self.gpu_mapping = [0,0,1,1,2,2,3,3,4]
+
         self.gcn_networks = nn.ModuleList([
             StgcnLayer(
                 in_channels=conf['in_ch'][i],
@@ -58,7 +60,7 @@ class Model(nn.Module):
                 residual=not not conf['residual'][i],
                 dropout=conf['dropout'][i],
                 normalization=kwargs['normalization'],
-                device=0 if i < 5 else 1)
+                device=self.gpu_mapping[i])
             for i in range(conf['layers'])])
 
         # initialize parameters for edge importance weighting
@@ -75,7 +77,7 @@ class Model(nn.Module):
             conf['out_ch'][-1],
             out_channels=kwargs['num_classes'],
             kernel_size=1,
-            device=1)
+            device=4)
 
 
     def forward(self, x):
@@ -87,9 +89,10 @@ class Model(nn.Module):
 
         # forward
         for i, (gcn, importance) in enumerate(zip(self.gcn_networks, self.edge_importance)):
-            A = (self.A * importance).to(0 if i < 5 else 1)
-            if i == 5:
-                x.to(1)
+            print(x.device)
+            A = (self.A * importance).to(self.gpu_mapping[i])
+            x = x.to(self.gpu_mapping[i])
+            print(x.device, A.device)
             x = gcn(x, A)
 
         # global pooling (across time L, and nodes V)

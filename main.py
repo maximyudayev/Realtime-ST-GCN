@@ -59,7 +59,7 @@ def train(world_size, args):
     Model, Loss, SegmentGenerator, Statistics = pick_model(args)
 
     # perform common setup around the model's black box
-    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, world_size, args)
+    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, output_device, args)
 
     # list metrics that Processor should record
     metrics = [
@@ -68,7 +68,7 @@ def train(world_size, args):
         ConfusionMatrix(output_device, args.arch['num_classes'])]
 
     # construct a processing wrapper
-    processor = Processor(world_size, model, loss, statistics, segment_generator, metrics)
+    processor = Processor(output_device, model, loss, statistics, segment_generator, metrics)
 
     # perform the training
     # (the model is trained on all skeletons in the scene, simultaneously)
@@ -124,7 +124,7 @@ def test(world_size, args):
     Model, Loss, SegmentGenerator, Statistics = pick_model(args)
 
     # perform common setup around the model's black box
-    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, world_size, args)
+    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, output_device, args)
 
     # list metrics that Processor should record
     metrics = [
@@ -133,7 +133,7 @@ def test(world_size, args):
         ConfusionMatrix(output_device, args.arch['num_classes'])]
 
     # construct a processing wrapper
-    processor = Processor(world_size, model, loss, statistics, segment_generator, metrics)
+    processor = Processor(output_device, model, loss, statistics, segment_generator, metrics)
 
     # perform the testing
     processor.test(
@@ -185,7 +185,7 @@ def benchmark(world_size, args):
     Model, Loss, SegmentGenerator, Statistics = pick_model(args)
 
     # perform common setup around the model's black box
-    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, world_size, args)
+    model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, output_device, args)
 
     # get custom quantization details if the model needs any
     # maps custom quantization replacement modules
@@ -199,7 +199,7 @@ def benchmark(world_size, args):
         ConfusionMatrix(output_device, args.arch['num_classes'])]
 
     # construct a processing wrapper
-    processor = Processor(world_size, model, loss, statistics, segment_generator, metrics)
+    processor = Processor(output_device, model, loss, statistics, segment_generator, metrics)
 
     # perform the testing
     processor.benchmark(

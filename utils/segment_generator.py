@@ -3,16 +3,16 @@ import torch.nn.functional as F
 
 
 class Segment:
-    def __init__(self,world_size, **kwargs):
+    def __init__(self, output_device, **kwargs):
         # number of stages
         self.num_stages = kwargs['stages']
         self.num_classes = kwargs['num_classes']
         self.V = kwargs['graph']['num_node']
         self.C = kwargs['in_feat']
-        self.world_size = world_size
+        self.output_device = output_device
 
     def alloc_output(self, L, dtype):
-        return torch.zeros(self.num_stages, self.num_classes, L, dtype=dtype, device=self.world_size-1)
+        return torch.zeros(self.num_stages, self.num_classes, L, dtype=dtype, device=self.output_device)
 
 
 class BufferSegment(Segment):
