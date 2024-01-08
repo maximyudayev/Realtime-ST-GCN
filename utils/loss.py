@@ -22,10 +22,10 @@ class Loss:
         # MSE component punishes large variations intra-class predictions between consecutive time quants
         self.mse = nn.MSELoss(reduction='none')
 
-    def __call__(self, predictions, ground_truth):        
+    def __call__(self, i, predictions, ground_truth):        
         # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
         # NOTE: subsegments have an overlap of 1 in outputs to enable correct MSE calculation, CE calculation should avoid double counting that frame
-        ce = self.ce(self.foo(predictions), ground_truth)
+        ce = self.ce(self.foo(predictions if i==0 else predictions[:,:,1:]), ground_truth if i==0 else ground_truth[:,1:])
 
         predictions = self.bar(predictions)
         # in the reduced temporal resolution setting of the original model, MSE loss is expected to be large the higher
@@ -42,12 +42,12 @@ class Loss:
 
 
 class LossMultiStage(Loss):
-    def __call__(self, predictions, ground_truth):
+    def __call__(self, i, predictions, ground_truth):
         ce_tot = 0
         mse_tot = 0
 
         for k in range(predictions.size(0)):
-            ce, mse = super().__call__(predictions[k], ground_truth)
+            ce, mse = super().__call__(i, predictions[k], ground_truth)
             ce_tot += ce
             mse_tot += mse
 

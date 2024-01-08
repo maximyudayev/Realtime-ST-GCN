@@ -35,6 +35,7 @@ def _build_model(Model, rank, args):
     model.to(rank)
 
     # load the checkpoint if not trained from scratch
+    # TODO: replace with internal method `_load`, specific to each model
     if args.processor.get('checkpoint'):
         state = torch.load(args.processor['checkpoint'], map_location=rank)
         if torch.cuda.device_count() > 1:
@@ -305,9 +306,9 @@ class Processor:
                 # (captures is a batch of full-length captures, label is a batch of ground truths)
                 captures, labels = captures[None].to(self.rank), labels[None].to(self.rank)
 
-                top1_predicted, _, _, _, _, _, _, _, _ = self._forward(captures, labels)
+                top1 = [top1_predicted for top1_predicted, _, _, _, _, _, _, _, _ in self._forward(captures, labels)]
 
-                pd.DataFrame(torch.stack((labels[0], top1_predicted[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}{2}.csv'.format(save_dir, i, suffix if suffix is not None else ""))
+                pd.DataFrame(torch.stack((labels[0], torch.stack(top1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}{2}.csv'.format(save_dir, i, suffix if suffix is not None else ""))
         return None
 
 
@@ -342,23 +343,22 @@ class Processor:
         captures = F.pad(captures, (0, 0, P_start, P_end))
 
         # get the next segment corresponding to the model type and segmentation strategy
-        data = self.segment_generator.get_segment(captures)
+        for i, (x, y, num_subsegments) in enumerate(self.segment_generator.get_segment(captures, labels)):
+            # the input tensor has shape (N, C, L, V): N-batch, V-nodes, C-channels, L-length
+            # the output tensor has shape (N, C', L)
+            predictions = self.model(x)
 
-        # the input tensor has shape (N, C, L, V): N-batch, V-nodes, C-channels, L-length
-        # the output tensor has shape (N, C', L)
-        predictions = self.model(data)
+            # recombine results back into a time-series, corresponding to the segmentation strategy
+            predictions = self.segment_generator.mask_segment(L, P_start, P_end, predictions)
 
-        # recombine results back into a time-series, corresponding to the segmentation strategy
-        predictions = self.segment_generator.mask_segment(L, P_start, P_end, predictions)
+            # get the loss of the model
+            ce, mse = self.loss(i, predictions, y)
 
-        # get the loss of the model
-        ce, mse = self.loss(predictions, labels)
+            # calculate the predictions statistics
+            top1_predicted, top5_predicted, top1_cor, top5_cor, tot = self.statistics(i, predictions, y)
 
-        # calculate the predictions statistics
-        top1_predicted, top5_predicted, top1_cor, top5_cor, tot = self.statistics(predictions, labels)
-
-        # statistics for each segment of the trial
-        return top1_predicted, top5_predicted, labels, top1_cor, top5_cor, tot, ce, mse, None
+            # statistics for each segment of the trial
+            yield top1_predicted, top5_predicted, y, top1_cor, top5_cor, tot, ce/num_subsegments, mse/num_subsegments, None
 
 
     def _forward_rt(
@@ -424,29 +424,33 @@ class Processor:
                 # don't loop through entire dataset - useful to calibrate quantized model or to get the latency metric
                 if k == num_samples: break
 
-                top1_predicted, _, _, top1_cor, top5_cor, tot, ce, mse, lat = foo(captures, labels)
-                # epoch loss has to multiply by minibatch size to get total non-averaged loss,
-                # which will then be averaged across the entire dataset size, since
-                # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
-                # (used for statistics)
-                ce_epoch_loss_val += ce.data.item()
-                mse_epoch_loss_val += mse.data.item()
+                top1 = []
 
-                # evaluate the model
-                top1_correct += top1_cor
-                top5_correct += top5_cor
-                total += tot
+                for top1_predicted, _, _, top1_cor, top5_cor, tot, ce, mse, lat in foo(captures, labels):
+                    # epoch loss has to multiply by minibatch size to get total non-averaged loss,
+                    # which will then be averaged across the entire dataset size, since
+                    # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
+                    # (used for statistics)
+                    ce_epoch_loss_val += ce.data.item()
+                    mse_epoch_loss_val += mse.data.item()
 
-                print(
-                    "[rank {0}, trial {1}]: loss = {2}"
-                    .format(self.rank, k, ce+mse),
-                    flush=True,
-                    file=log[0])
+                    # evaluate the model
+                    top1_correct += top1_cor
+                    top5_correct += top5_cor
+                    total += tot
 
-                latency += lat if lat else 0
+                    print(
+                        "[rank {0}, trial {1}]: loss = {2}"
+                        .format(self.rank, k, ce+mse),
+                        flush=True,
+                        file=log[0])
+
+                    latency += lat if lat else 0
+
+                    top1.append(top1_predicted)
 
                 # collect user-defined evaluation metrics
-                self._collect_metrics(labels.to(self.rank), top1_predicted)
+                self._collect_metrics(labels.to(self.rank), torch.stack(top1))
 
                 test_end_time = time.time()
                 duration = test_end_time - test_start_time
@@ -476,40 +480,40 @@ class Processor:
 
         # sweep through the training dataset in minibatches
         for i, (captures, labels) in enumerate(dataloader):
-            _, _, _, top1_cor, top5_cor, tot, ce, mse, _ = self._forward(captures, labels)
-            top1_correct += top1_cor
-            top5_correct += top5_cor
-            total += tot
+            for _, _, _, top1_cor, top5_cor, tot, ce, mse, _ in self._forward(captures, labels):
+                top1_correct += top1_cor
+                top5_correct += top5_cor
+                total += tot
 
-            # epoch loss has to multiply by minibatch size to get total non-averaged loss,
-            # which will then be averaged across the entire dataset size, since
-            # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
-            # (used for statistics)
-            ce_epoch_loss_train += ce.data.item()
-            mse_epoch_loss_train += mse.data.item()
+                # epoch loss has to multiply by minibatch size to get total non-averaged loss,
+                # which will then be averaged across the entire dataset size, since
+                # loss for dataset with equal-length trials averages the CE and MSE losses for each minibatch
+                # (used for statistics)
+                ce_epoch_loss_train += ce.data.item()
+                mse_epoch_loss_train += mse.data.item()
 
-            # loss is not a mean across minibatch for different-length trials -> needs averaging
-            loss = ce + mse
-            if (len(dataloader) % batch_size == 0 or
-                i < len(dataloader) - (len(dataloader) % batch_size)):
+                # loss is not a mean across minibatch for different-length trials -> needs averaging
+                loss = ce + mse
+                if (len(dataloader) % batch_size == 0 or
+                    i < len(dataloader) - (len(dataloader) % batch_size)):
 
-                # if the minibatch is the same size as requested (first till one before last minibatch)
-                # (because dataset is a multiple of batch size or if current minibatch is of requested size)
-                loss /= batch_size
-            elif (len(dataloader) % batch_size != 0 and
-                i >= len(dataloader) - (len(dataloader) % batch_size)):
+                    # if the minibatch is the same size as requested (first till one before last minibatch)
+                    # (because dataset is a multiple of batch size or if current minibatch is of requested size)
+                    loss /= batch_size
+                elif (len(dataloader) % batch_size != 0 and
+                    i >= len(dataloader) - (len(dataloader) % batch_size)):
 
-                # if the minibatch is smaller than requested (last minibatch or data partition is smaller than requested batch size)
-                loss /= (len(dataloader) % batch_size)
+                    # if the minibatch is smaller than requested (last minibatch or data partition is smaller than requested batch size)
+                    loss /= (len(dataloader) % batch_size)
 
-            print(
-                "[rank {0}, trial {1}]: loss = {2}"
-                .format(self.rank, i, loss),
-                flush=True,
-                file=log[0])
+                print(
+                    "[rank {0}, trial {1}]: loss = {2}"
+                    .format(self.rank, i, loss),
+                    flush=True,
+                    file=log[0])
 
-            # backward pass to compute the gradients
-            loss.backward()
+                # backward pass to compute the gradients
+                loss.backward()
 
             # zero the gradient buffers after every batch
             # if dataset is a tensor with equal length trials, always enters
@@ -604,12 +608,11 @@ class Processor:
 
             # checkpoint the model during training at specified epochs
             if (epoch in optim_conf['checkpoint_indices']):
-                torch.save({
-                    "epoch": epoch,
-                    "model_state_dict": self.model.module.state_dict() if torch.cuda.device_count() > 1 else self.model.state_dict(),
-                    "optimizer_state_dict": self.optimizer.state_dict(),
-                    "loss": loss_train.sum() / len(train_dataloader),
-                    }, "{0}/epoch-{1}.pt".format(proc_conf['save_dir'], epoch))
+                self.model._save(
+                    epoch=epoch,
+                    optimizer_state_dict=self.optimizer.state_dict(),
+                    loss=loss_train.sum() / len(train_dataloader),
+                    checkpoint_name="{0}/epoch-{1}.pt".format(proc_conf['save_dir'], epoch))
 
             # set layers to inference mode if behavior differs between train and prediction
             # (prepares Dropout and BatchNormalization layers to enable and to freeze parameters, respectively)
@@ -735,12 +738,11 @@ class Processor:
                 }).to_csv('{0}/train-validation-curve.csv'.format(proc_conf['save_dir']))
 
         # save the final model
-        torch.save({
-            "epoch": epoch,
-            "model_state_dict": self.model.module.state_dict() if torch.cuda.device_count() > 1 else self.model.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict(),
-            "loss": loss_train.sum() / len(train_dataloader),
-            }, "{0}/final.pt".format(proc_conf['save_dir']))
+        self.model._save(
+            epoch=epoch,
+            optimizer_state_dict=self.optimizer.state_dict(),
+            loss=loss_train.sum() / len(train_dataloader),
+            checkpoint_name="{0}/final.pt".format(proc_conf['save_dir']))
 
         print("Training completed in: {0}".format(time.time() - start_time), flush=True, file=job_conf["log"][0])
 

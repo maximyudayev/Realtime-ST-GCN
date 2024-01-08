@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.utils import Graph, LayerNorm, BatchNorm1d
 from models.stgcn.stgcn import StgcnLayer
-from torch.utils.checkpoint import checkpoint
 
 
 class Model(nn.Module):
@@ -42,7 +41,6 @@ class Model(nn.Module):
                     residual=not not conf['residual'][i],
                     dropout=conf['dropout'][i],
                     num_joints=kwargs['graph']['num_node'],
-                    importance=conf['importance'],
                     normalization=kwargs['normalization'])
                 for i in range(conf['layers'])]),
             "fcn_out": nn.Conv2d(
@@ -79,7 +77,7 @@ class Model(nn.Module):
         # global pooling (across time L, and nodes V)
         x_joint = F.avg_pool2d(x_joint, x_joint.size()[2:])
         # prediction
-        x_joint = checkpoint(self.streams[0]['fcn_out'], x_joint)
+        x_joint = self.streams[0]['fcn_out'](x_joint)
 
         # pass both streams through the coresponding branch and add prediction probabilities
         x_bone = self.streams[1]['norm_in'](x_bone)
@@ -97,6 +95,23 @@ class Model(nn.Module):
         return self.probability(x_bone.squeeze(-1)) + self.probability(x_joint.squeeze(-1))
 
 
+    def _save(
+        self, 
+        epoch,
+        optimizer_state_dict,
+        loss,
+        checkpoint_name):
+
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": self.module.state_dict() if torch.cuda.device_count() > 1 else self.state_dict(),
+            "optimizer_state_dict": optimizer_state_dict,
+            "loss": loss,
+            }, checkpoint_name)
+
+        return None
+
+
 class AgcnLayer(nn.Module):
     def __init__(
         self,
@@ -108,7 +123,6 @@ class AgcnLayer(nn.Module):
         residual,
         dropout,
         num_joints,
-        importance,
         normalization='LayerNorm'):
 
         super(AgcnLayer, self).__init__()
@@ -120,7 +134,7 @@ class AgcnLayer(nn.Module):
         self.num_joints = num_joints
 
         # fully-learnable adjacency matrix B, initialized as 0's
-        self.B = nn.Parameter(torch.zeros(partitions, num_joints, num_joints), requires_grad=True) if importance else 1
+        self.B = nn.Parameter(torch.zeros(partitions, num_joints, num_joints), requires_grad=True)
 
         # self-attention adjacency matrix C, produces 2 matrices
         self.theta = nn.Conv2d(in_channels, self.embedding_channels*partitions, 1)

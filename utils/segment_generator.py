@@ -31,7 +31,7 @@ class BufferSegment(Segment):
         temp = (L-(self.world_size-1)*(self.G-1))%self.world_size
         # (temp = 0 - trial splits perfectly, temp < 0 - trial shorter than S, temp > 0 - padding needed to perfectly split)
         P_end = 0 if temp == 0 else (self.world_size-temp)
-        
+
         self.S = ((L+P_end-(self.world_size-1)*(self.G-1))//self.world_size)+(0 if self.world_size==1 else self.G-1)
 
         return P_start, P_end
@@ -63,7 +63,8 @@ class WindowSegment(Segment):
         # TODO: provide reduced temporal resolution case
         # window size
         self.W = kwargs['receptive_field']
-    
+        self.subsegment_size = kwargs['segment']
+
     def pad_sequence(self, L):
         # pad the start by the receptive field size (emulates empty buffer)
         P_start = self.W-1
@@ -71,15 +72,24 @@ class WindowSegment(Segment):
         self.S = L
 
         return P_start, P_end
-    
-    def get_segment(self, captures):
+
+    def get_segment(self, captures, labels):
         # TODO: change stride of unfolding for temporal resolution reduction
-        return captures.unfold(2, self.W, 1).permute(0,2,1,4,3).contiguous().view(self.S, self.C, self.W, self.V)
+        temp = (self.S-self.subsegment_size)%(self.subsegment_size-1)
+        num_segments = ((self.S+temp-self.subsegment_size)//(self.subsegment_size-1))+1
+        segments = (((self.subsegment_size-1)*i, (self.subsegment_size-1)*i+self.subsegment_size) for i in range(num_segments))
+
+        for start, end in segments:
+            end = self.S if end > self.S else end
+            yield \
+                captures[:,:,start:end+self.W-1].unfold(2, self.W, 1).permute(0,2,1,4,3).contiguous().view(end-start, self.C, self.W, self.V), \
+                labels[:,start:end], \
+                num_segments
 
     def mask_segment(self, L, P_start, P_end, predictions):
         # arrange tensor back into a time series
         # (N',C',1)->(N,L,C')->(N,C',L)
-        return predictions.view(1, self.S, self.num_classes).permute(0,2,1)
+        return predictions.permute(2,1,0)
 
 
 class WindowSegmentMultiStage(WindowSegment):

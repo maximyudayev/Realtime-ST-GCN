@@ -13,6 +13,7 @@
     "arch": {
         "strategy": "spatial",
         "receptive_field": 50,
+        "segment": 3000,
         "in_feat": 3,
         "stages": 1,
         "output_type": "softmax",
