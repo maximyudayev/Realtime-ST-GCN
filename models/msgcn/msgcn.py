@@ -55,30 +55,10 @@ class Model(nn.Module):
 
         x = self.generator_stage(x)
         # (N,C,1) -> (1,C,L,1) | N=L
-        x = x.permute(2,1,0,3)
+        x = x.view(1, N, self.num_classes, 1).permute(0,2,1,3)
         outputs[0] = self.out(x[:,:,:,0])
 
         for i, stage in enumerate(self.refinement_stages):
             x = stage(self.probability(x))
             outputs[i+1] = self.out(x.squeeze(-1))
         return outputs
-
-
-    def _save(
-        self, 
-        epoch,
-        optimizer_state_dict,
-        loss,
-        checkpoint_name):
-
-        torch.save({
-            "epoch": epoch,
-            "model_state_dict": {
-                "generator_stage": self.generator_stage.module.state_dict() if torch.cuda.device_count() > 1 else self.generator_stage.state_dict(),
-                "refinement_stages": self.refinement_stages.state_dict()
-            },
-            "optimizer_state_dict": optimizer_state_dict,
-            "loss": loss,
-            }, checkpoint_name)
-
-        return None

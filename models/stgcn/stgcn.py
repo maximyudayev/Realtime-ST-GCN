@@ -96,24 +96,6 @@ class Model(nn.Module):
         return x.squeeze(-1)
 
 
-    def _save(
-        self, 
-        epoch,
-        optimizer_state_dict,
-        loss,
-        checkpoint_name):
-
-        torch.save({
-            "epoch": epoch,
-            "model_state_dict": self.module.state_dict() if torch.cuda.device_count() > 1 else self.state_dict(),
-            "optimizer_state_dict": optimizer_state_dict,
-            "loss": loss,
-            }, checkpoint_name)
-
-        return None
-
-
-
 class StgcnLayer(nn.Module):
     """Applies a spatial temporal graph convolution over an input graph sequence.
     Args:

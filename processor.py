@@ -308,7 +308,28 @@ class Processor:
 
                 top1 = [top1_predicted for top1_predicted, _, _, _, _, _, _, _, _ in self._forward(captures, labels)]
 
-                pd.DataFrame(torch.stack((labels[0], torch.stack(top1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}{2}.csv'.format(save_dir, i, suffix if suffix is not None else ""))
+                pd.DataFrame(torch.stack((labels[0], torch.cat(top1,dim=1)[0])).cpu().numpy()).to_csv('{0}/segmentation-{1}{2}.csv'.format(save_dir, i, suffix if suffix is not None else ""))
+        return None
+
+
+    def _save_model(self, epoch, loss, checkpoint_name):
+        if not isinstance(self.model, MsGcn):
+            torch.save({
+                "epoch": epoch,
+                "model_state_dict": self.model.module.state_dict() if torch.cuda.device_count() > 1 else self.model.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "loss": loss,
+                }, checkpoint_name)
+        else:
+            torch.save({
+                "epoch": epoch,
+                "model_state_dict": {
+                    "generator_stage": self.model.generator_stage.module.state_dict() if torch.cuda.device_count() > 1 else self.model.generator_stage.state_dict(),
+                    "refinement_stages": self.model.refinement_stages.state_dict()
+                },
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "loss": loss,
+                }, checkpoint_name)
         return None
 
 
@@ -450,7 +471,7 @@ class Processor:
                     top1.append(top1_predicted)
 
                 # collect user-defined evaluation metrics
-                self._collect_metrics(labels.to(self.rank), torch.stack(top1))
+                self._collect_metrics(labels.to(self.rank), torch.cat(top1, dim=1))
 
                 test_end_time = time.time()
                 duration = test_end_time - test_start_time
@@ -608,9 +629,8 @@ class Processor:
 
             # checkpoint the model during training at specified epochs
             if (epoch in optim_conf['checkpoint_indices']):
-                self.model._save(
+                self._save_model(
                     epoch=epoch,
-                    optimizer_state_dict=self.optimizer.state_dict(),
                     loss=loss_train.sum() / len(train_dataloader),
                     checkpoint_name="{0}/epoch-{1}.pt".format(proc_conf['save_dir'], epoch))
 
@@ -738,9 +758,8 @@ class Processor:
                 }).to_csv('{0}/train-validation-curve.csv'.format(proc_conf['save_dir']))
 
         # save the final model
-        self.model._save(
+        self._save_model(
             epoch=epoch,
-            optimizer_state_dict=self.optimizer.state_dict(),
             loss=loss_train.sum() / len(train_dataloader),
             checkpoint_name="{0}/final.pt".format(proc_conf['save_dir']))
 

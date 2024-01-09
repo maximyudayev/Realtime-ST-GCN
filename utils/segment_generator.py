@@ -74,16 +74,18 @@ class WindowSegment(Segment):
         return P_start, P_end
 
     def get_segment(self, captures, labels):
-        # TODO: change stride of unfolding for temporal resolution reduction
-        temp = (self.S-self.subsegment_size)%(self.subsegment_size-1)
-        num_segments = ((self.S+temp-self.subsegment_size)//(self.subsegment_size-1))+1
-        segments = (((self.subsegment_size-1)*i, (self.subsegment_size-1)*i+self.subsegment_size) for i in range(num_segments))
+        num_segments = (self.S+self.S%self.subsegment_size)//self.subsegment_size
+        segments = ((
+                self.subsegment_size*i - (1 if i>0 else 0),
+                self.subsegment_size*(i+1)+(self.W-1) if i<num_segments-1 else captures.size(2),
+                self.subsegment_size*i,
+                self.subsegment_size*(i+1) if i<num_segments-1 else labels.size(1)
+                ) for i in range(num_segments))
 
-        for start, end in segments:
-            end = self.S if end > self.S else end
+        for startX, endX, startY, endY in segments:
             yield \
-                captures[:,:,start:end+self.W-1].unfold(2, self.W, 1).permute(0,2,1,4,3).contiguous().view(end-start, self.C, self.W, self.V), \
-                labels[:,start:end], \
+                captures[:,:,startX:endX].unfold(2, self.W, 1).permute(0,2,1,4,3).contiguous().view(endX-startX-(self.W-1), self.C, self.W, self.V), \
+                labels[:,startY:endY], \
                 num_segments
 
     def mask_segment(self, L, P_start, P_end, predictions):

@@ -6,7 +6,6 @@ class Statistics:
         # this only sums the number of top-1 correctly predicted frames, but doesn't look at prediction jitter
         # NOTE: avoids double counting single overlapping frame occuring in two consequent subsegments
         predictions = predictions if i==0 else predictions[:,:,1:]
-        ground_truth = ground_truth if i==0 else ground_truth[:,1:]
 
         _, top5_predicted = torch.topk(predictions, k=5, dim=1)
         top1_predicted = top5_predicted[:,0,:]
