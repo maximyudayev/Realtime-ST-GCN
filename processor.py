@@ -38,12 +38,22 @@ def _build_model(Model, rank, args):
     # TODO: replace with internal method `_load`, specific to each model
     if args.processor.get('checkpoint'):
         state = torch.load(args.processor['checkpoint'], map_location=rank)
-        if torch.cuda.device_count() > 1:
-            model.load_state_dict({
-                'module.'+k: v
-                for k,v in state['model_state_dict'].items()})
+        if not isinstance(model, MsGcn):
+            if torch.cuda.device_count() > 1:
+                model.load_state_dict({
+                    'module.'+k: v
+                    for k,v in state['model_state_dict'].items()})
+            else:
+                model.load_state_dict(state['model_state_dict'])
         else:
-            model.load_state_dict(state['model_state_dict'])
+            if torch.cuda.device_count() > 1:
+                model.generator_stage.load_state_dict({
+                    'module.'+k: v
+                    for k,v in state['model_state_dict']['generator_stage'].items()})
+            else:
+                model.generator_stage.load_state_dict(state['model_state_dict']['generator_stage'])
+
+            model.refinement_stages.load_state_dict(state['model_state_dict']['refinement_stages'])
 
     return model
 
