@@ -1,24 +1,23 @@
 {
     "processor": {
-        "model": "ms-gcn",
-        "data": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1-copy",
+        "model": "st-gcn",
+        "data": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1-subset",
         "dataset_type": "dir",
         "out": "/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
         "backup": "/data/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
         "actions": "/data/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1/actions.txt",
         "graph": "/data/leuven/341/vsc34153/rt-st-gcn/data/skeletons/pku-mmd.json",
-        "demo": [175,293,37],
+        "demo": [1,2,3],
         "iou_threshold": [0.1,0.25,0.5]
     },
     "arch": {
         "strategy": "spatial",
         "receptive_field": 50,
-        "segment": 2000,
+        "segment": 500,
         "in_feat": 3,
-        "stages": 4,
-        "refine": "softmax",
+        "stages": 1,
         "output_type": "logits",
-        "normalization": "LayerNorm",
+        "normalization": "BatchNorm",
         "st-gcn": {
             "latency": false,
             "importance": true,
@@ -29,22 +28,13 @@
             "in_ch": [64,64,64,64,128,128,128,256,256],
             "out_ch": [64,64,64,128,128,128,256,256,256],
             "stride": [1,1,1,2,1,1,2,1,1],
-            "residual": [1,1,1,1,1,1,1,1,1],
+            "residual":[1,1,1,1,1,1,1,1,1],
             "dropout": [0,0,0,0,0,0,0,0,0]
-        },
-        "ms-tcn": {
-            "latency": false,
-            "importance": true,
-            "stages": 3,
-            "layers": [10,10,10],
-            "kernel": [3,3,3],
-            "filters": [64,64,64],
-            "dropout": [0,0,0]
         }
     },
     "optimizer": {
         "seed": 1538574472,
-        "epochs": 50,
+        "epochs": 1,
         "checkpoint_indices": [
             0,1,2,3,4,5,6,7,8,9,
             10,11,12,13,14,15,16,17,18,19,

@@ -1,7 +1,7 @@
 {
     "processor": {
         "model": "aa-gcn",
-        "data": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1",
+        "data": "/scratch/leuven/341/vsc34153/rt-st-gcn/data/pku-mmdv1-copy",
         "dataset_type": "dir",
         "out": "/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
         "backup": "/data/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1",
@@ -13,7 +13,7 @@
     "arch": {
         "strategy": "spatial",
         "receptive_field": 50,
-        "segment": 3000,
+        "segment": 2000,
         "in_feat": 3,
         "stages": 1,
         "output_type": "softmax",

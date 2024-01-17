@@ -10,7 +10,8 @@ data/pku-mmdv1/*
 data/pku-mmdv2/*
 data/imu_fogit_ABCD/*
 
-pretrained_models/*
+pretrained_models/pku-mmdv1/*/*
+pretrained_models/imu_fogit_ABCD/*
 .ipynb_checkpoints/
 
 # exceptions
@@ -21,6 +22,7 @@ pretrained_models/*
 !data/imu_fogit_ABCD
 !data/*/actions.txt
 
+!pretrained_models/*/*/*.csv
 !pretrained_models/**/train-validation-curve.ods
 !.vscode/launch.json
 
