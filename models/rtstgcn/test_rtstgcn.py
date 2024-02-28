@@ -77,8 +77,7 @@ for i in range(e.shape[1]):
     temp_tensor = torch.eye(G*C, G*C)
     for i in range(G):
         for j in range(len(shifts)):
-            temp_tensor[:, i * C + (partition_size * j): i * C + (partition_size * (j + 1))] = \
-            torch.roll(temp_tensor[:, i * C + (partition_size * j): i * C + (partition_size * (j + 1))], shifts[j], 0)
+            temp_tensor[:, i * C + (partition_size * j): i * C + (partition_size * (j + 1))] = torch.roll(temp_tensor[:, i * C + (partition_size * j): i * C + (partition_size * (j + 1))], shifts[j], 0)
     
     temp_tensor[G*C - partition_size: G*C, 0:partition_size] = 0
     temp_tensor[0:partition_size, G*C - partition_size: G*C] = 0
