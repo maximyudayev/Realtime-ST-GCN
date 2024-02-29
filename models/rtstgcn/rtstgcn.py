@@ -604,7 +604,7 @@ class AggregateStgcn(nn.Module):
             # slice the tensor according to the temporal stride size
             # (if stride is 1, returns the whole tensor itself)
             a = self.fifo[:,range(0, self.fifo_size, self.stride)]
-
+            
             # sum temporally
             # (C,H)
             b = torch.sum(a, dim=(1))
