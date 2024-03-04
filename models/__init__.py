@@ -1,5 +1,6 @@
 from .rtstgcn import Model as RtStgcn
 from .stgcn import Model as Stgcn
+from .costgcn import Model as CoStgcn
 from .mstcn import Model as MsTcn
 from .msgcn import Model as MsGcn
 from .aagcn import Model as AaGcn
@@ -9,6 +10,7 @@ from .aagcn import Model as AaGcn
 
 MODELS = {
     'st-gcn': Stgcn,
+    'co-st-gcn': CoStgcn,
     'rt-st-gcn': RtStgcn,
     'ms-tcn': MsTcn,
     'ms-gcn': MsGcn,

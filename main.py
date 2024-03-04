@@ -183,8 +183,8 @@ def benchmark(rank, world_size, args):
 
     # get custom quantization details if the model needs any
     # maps custom quantization replacement modules
-    args.arch['prepare_dict'] = Model.prepare_dict()
-    args.arch['convert_dict'] = Model.convert_dict()
+    # args.arch['prepare_dict'] = Model.prepare_dict()
+    # args.arch['convert_dict'] = Model.convert_dict()
 
     # list metrics that Processor should record
     metrics = [

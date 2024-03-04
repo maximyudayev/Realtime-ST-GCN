@@ -6,6 +6,7 @@ from .statistics import Statistics, StatisticsMultiStage
 
 LOSS = {
     'st-gcn': Loss,
+    'co-st-gcn': Loss,
     'rt-st-gcn': Loss,
     'ms-tcn': LossMultiStage,
     'ms-gcn': LossMultiStage,
@@ -16,6 +17,7 @@ LOSS = {
 
 SEGMENT_GENERATOR = {
     'st-gcn': WindowSegment,
+    'co-st-gcn': WindowSegment,
     'rt-st-gcn': BufferSegment,
     'ms-tcn': WindowSegmentOneToOneMultiStage,
     'ms-gcn': WindowSegmentMultiStage,
@@ -26,6 +28,7 @@ SEGMENT_GENERATOR = {
 
 STATISTICS = {
     'st-gcn': Statistics,
+    'co-st-gcn': Statistics,
     'rt-st-gcn': Statistics,
     'ms-tcn': StatisticsMultiStage,
     'ms-gcn': StatisticsMultiStage,

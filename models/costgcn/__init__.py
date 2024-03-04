@@ -1,0 +1,1 @@
+from .costgcn import Model

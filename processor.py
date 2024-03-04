@@ -878,8 +878,8 @@ class Processor:
 
         # replace trainable layers of the proposed model with quantizeable inference-only version
         # TODO: extend to other models and call using meaningful common method name
-        self.model._swap_layers_for_inference()
-        self.model.eval_()
+        # self.model._swap_layers_for_inference()
+        # self.model.eval_()
 
         self.model.eval()
 
