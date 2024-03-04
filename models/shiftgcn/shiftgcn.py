@@ -615,11 +615,11 @@ class AggregateStgcn(nn.Module):
             for i in range(G * C):
                 shift = torch.floor(self.adaptive_shift[i % C].item())
                 partial_shift = self.adaptive_shift[i%C].item() - torch.floor(self.adaptive_shift[i%C].item())
-                if shift*C + i < 0 or shift*C + i > G * C - 1:
+                if shift*C + i >= 0 or shift*C + i < G * C:
                     temp_tensor[:, i] = torch.roll(temp_tensor[:, i] * (1 - partial_shift), shift*C, 0)
                 else:
                     temp_tensor[:, i] = 0
-                if (shift + 1)*C + i < 0 or (shift + 1)*C + i > G * C - 1:
+                if (shift + 1)*C + i >= 0 or (shift + 1)*C + i < G * C:
                     temp_tensor[:, i] = torch.roll(temp_tensor[:, i] * partial_shift, (shift + 1)*C, 0)
                 else:
                     temp_tensor[:, i] = 0
