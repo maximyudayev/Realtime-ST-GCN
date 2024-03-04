@@ -25,3 +25,10 @@ print(A)
 # print(A)
 C = 1
 print(A[:, C::2])
+c = torch.floor(torch.tensor((3.97, 1,2,3,4,5,6,7,7,8)))
+print(c[6])
+j = torch.nn.parameter.Parameter(torch.ones(3))
+c = j[2]
+print(type(c))
+print(c.item())
+print(torch.floor(torch.tensor(-1.3)))
