@@ -32,3 +32,4 @@ c = j[2]
 print(type(c))
 print(c.item())
 print(torch.floor(torch.tensor(-1.3)))
+k = 0.0

@@ -610,19 +610,15 @@ class AggregateStgcn(nn.Module):
             # num_of_partitions = 2 * self.adaptive_shift + 1 #Number of partitions
             # partition_size = int(a.shape[2] / num_of_partitions) #Size of each partition
             shifted_a = torch.reshape(a, [G*C, V]) #Initialize the shifted tensor
-            temp_tensor = torch.eye(G*C, G*C)
+            temp_tensor = torch.zeros(G*C, G*C)
             
             for i in range(G * C):
                 shift = torch.floor(self.adaptive_shift[i % C].item())
                 partial_shift = self.adaptive_shift[i%C].item() - torch.floor(self.adaptive_shift[i%C].item())
                 if shift*C + i >= 0 or shift*C + i < G * C:
-                    temp_tensor[:, i] = torch.roll(temp_tensor[:, i] * (1 - partial_shift), shift*C, 0)
-                else:
-                    temp_tensor[:, i] = 0
+                    temp_tensor[shift*C + i, i] = 1.0 * (1 - partial_shift)
                 if (shift + 1)*C + i >= 0 or (shift + 1)*C + i < G * C:
-                    temp_tensor[:, i] = torch.roll(temp_tensor[:, i] * partial_shift, (shift + 1)*C, 0)
-                else:
-                    temp_tensor[:, i] = 0
+                    temp_tensor[(shift + 1)*C, i] = 1.0 * partial_shift
 
             shifted_a = torch.matmul(temp_tensor, shifted_a).reshape([N, G, C, V])
             
