@@ -618,7 +618,7 @@ class AggregateStgcn(nn.Module):
                 if shift*C + i >= 0 or shift*C + i < G * C:
                     temp_tensor[shift*C + i, i] = 1.0 * (1 - partial_shift)
                 if (shift + 1)*C + i >= 0 or (shift + 1)*C + i < G * C:
-                    temp_tensor[(shift + 1)*C, i] = 1.0 * partial_shift
+                    temp_tensor[(shift + 1)*C + i, i] = 1.0 * partial_shift
 
             shifted_a = torch.matmul(temp_tensor, shifted_a).reshape([N, G, C, V])
             
