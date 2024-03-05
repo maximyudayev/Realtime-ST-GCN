@@ -609,7 +609,7 @@ class AggregateStgcn(nn.Module):
 
             # num_of_partitions = 2 * self.adaptive_shift + 1 #Number of partitions
             # partition_size = int(a.shape[2] / num_of_partitions) #Size of each partition
-            shifted_a = torch.reshape(a, [G*C, V]) #Initialize the shifted tensor
+            shifted_tensor = torch.reshape(a, [G*C, V]) #Initialize the shifted tensor
             temp_tensor = torch.zeros(G*C, G*C)
             
             for i in range(G * C):
@@ -620,8 +620,16 @@ class AggregateStgcn(nn.Module):
                 if (shift + 1)*C + i >= 0 or (shift + 1)*C + i < G * C:
                     temp_tensor[(shift + 1)*C + i, i] = 1.0 * partial_shift
 
-            shifted_a = torch.matmul(temp_tensor, shifted_a).reshape([N, G, C, V])
+            shifted_tensor = torch.matmul(temp_tensor, shifted_tensor).reshape([N, G, C, V])
             
+            pointwise_conv = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(1, 1))
+
+            # Reshape the tensor to apply the convolution across the channels for each node
+            # New shape will be (1 * 9 * 25, 64, 1, 1) which is (batch*time*nodes, channels, height, width)
+            shifted_tensor_reshaped = shifted_tensor.view(-1, 64, 1, 1)
+
+            output_tensor_reshaped = pointwise_conv(shifted_tensor_reshaped).view(N, G, C, V)
+
             # sum temporally
             # (C,H)
             b = torch.sum(a, dim=(1))

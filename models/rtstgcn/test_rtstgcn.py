@@ -62,7 +62,7 @@ for i in range(e.shape[1]):
     # slice the tensor according to the temporal stride size
     # (if stride is 1, returns the whole tensor itself)
     f = fifo[:,range(0, G, S)]
-    
+    print(f.shape)
     #Adaptive temporal shift
     u = 3.5 #Temporal shift parameter
     num_of_partitions = 2 * u + 1 #Number of partitions
@@ -90,6 +90,7 @@ for i in range(e.shape[1]):
 
     # sum temporally and across partitions
     g = torch.sum(f, dim=(1))
+    print(g.shape)
     outputs.append(g)
 
 
