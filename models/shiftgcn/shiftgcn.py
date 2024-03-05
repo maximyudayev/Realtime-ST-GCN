@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.quantized as nnq
@@ -620,15 +621,11 @@ class AggregateStgcn(nn.Module):
                 if (shift + 1)*C + i >= 0 or (shift + 1)*C + i < G * C:
                     temp_tensor[(shift + 1)*C + i, i] = 1.0 * partial_shift
 
-            shifted_tensor = torch.matmul(temp_tensor, shifted_tensor).reshape([N, G, C, V])
+            shifted_tensor = torch.matmul(temp_tensor, shifted_tensor).reshape([G, C, int(math.sqrt(V)), int(math.sqrt(V))]) # [9, 64, 5, 5]
             
             pointwise_conv = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(1, 1))
 
-            # Reshape the tensor to apply the convolution across the channels for each node
-            # New shape will be (1 * 9 * 25, 64, 1, 1) which is (batch*time*nodes, channels, height, width)
-            shifted_tensor_reshaped = shifted_tensor.view(-1, 64, 1, 1)
-
-            output_tensor_reshaped = pointwise_conv(shifted_tensor_reshaped).view(N, G, C, V)
+            output_tensor_reshaped = pointwise_conv(shifted_tensor).view(N, G, C, V)
 
             # sum temporally
             # (C,H)
