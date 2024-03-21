@@ -34,20 +34,13 @@ print(c.item())
 print(torch.floor(torch.tensor(-1.3)))
 k = 0.0
 
-input_tensor = torch.randn(1, 9, 64, 25)
+input_tensor = torch.randn(9, 64, 5, 5)
 
 # Define the 1x1 convolutional layer
 # in_channels = 64, out_channels = 64, kernel_size = (1, 1)
 conv_layer = torch.nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(1, 1))
 
-# Reshape the tensor to apply the convolution across the channels for each node
-# New shape will be (1 * 9 * 25, 64, 1, 1) which is (batch*time*nodes, channels, height, width)
-input_tensor_reshaped = input_tensor.view(-1, 64, 1, 1)
-print(input_tensor_reshaped.shape)
 # Apply the convolutional layer to the reshaped tensor
-output_tensor_reshaped = conv_layer(input_tensor_reshaped)
-
-# Reshape back to the original shape (1, 9, 64, 25)
-output_tensor = output_tensor_reshaped.view(1, 9, 64, 25)
+output_tensor = conv_layer(input_tensor)
 
 print("Output Tensor Shape:", output_tensor.shape)

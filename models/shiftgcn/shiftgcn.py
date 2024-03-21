@@ -573,7 +573,7 @@ class AggregateStgcn(nn.Module):
         self.fifo_size = fifo_size
         self.kernel_size = kernel_size
         self.fifo = torch.zeros(1, fifo_size, out_channels, graph.size(1), dtype=torch.float32)
-        self.adaptive_shift = nn.parameter.Parameter(torch.ones(out_channels))
+        self.adaptive_shift = nn.Parameter(torch.rand(out_channels)*(fifo_size))
 
         # FIFO for intermediate Gamma graph frames after multiplication with adjacency matrices
         # (N,G,C,V) - (N)batch, (G)amma, (C)hannels, (V)ertices
@@ -598,43 +598,38 @@ class AggregateStgcn(nn.Module):
         x = torch.matmul(x, self.A)
         # perform temporal accumulation for each of the buffered frames
         # (portability for buffered_realtime setup, for realtime, the buffer is of size 1)
-        outputs = []
-        for i in range(x.shape[1]):
-            # push the frame, summed across partitions, into the FIFO
-            self.fifo = torch.cat((x.sum(dim=2)[:,i:i+1], self.fifo[:,:self.fifo_size-1]), 1)
 
-            # slice the tensor according to the temporal stride size
-            # (if stride is 1, returns the whole tensor itself)
-            a = self.fifo[:,range(0, self.fifo_size, self.stride)]
-            N, G, C, V = a.shape[0], a.shape[1], a.shape[2], a.shape[3]
+        # push the frame, summed across partitions, into the FIFO
+        self.fifo = torch.cat((x.sum(dim=2), self.fifo[:,:self.fifo_size-1]), 1)
 
-            # num_of_partitions = 2 * self.adaptive_shift + 1 #Number of partitions
-            # partition_size = int(a.shape[2] / num_of_partitions) #Size of each partition
-            shifted_tensor = torch.reshape(a, [G*C, V]) #Initialize the shifted tensor
-            temp_tensor = torch.zeros(G*C, G*C)
-            
-            for i in range(G * C):
-                shift = torch.floor(self.adaptive_shift[i % C].item())
-                partial_shift = self.adaptive_shift[i%C].item() - torch.floor(self.adaptive_shift[i%C].item())
-                if shift*C + i >= 0 or shift*C + i < G * C:
-                    temp_tensor[shift*C + i, i] = 1.0 * (1 - partial_shift)
-                if (shift + 1)*C + i >= 0 or (shift + 1)*C + i < G * C:
-                    temp_tensor[(shift + 1)*C + i, i] = 1.0 * partial_shift
+        # slice the tensor according to the temporal stride size
+        # (if stride is 1, returns the whole tensor itself)
+        a = self.fifo[:,range(0, self.fifo_size, self.stride)]
+        
+        N, G, C, V = a.size()
 
-            shifted_tensor = torch.matmul(temp_tensor, shifted_tensor).reshape([G, C, int(math.sqrt(V)), int(math.sqrt(V))]) # [9, 64, 5, 5]
-            
-            pointwise_conv = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(1, 1))
+        # num_of_partitions = 2 * self.adaptive_shift + 1 #Number of partitions
+        # partition_size = int(a.shape[2] / num_of_partitions) #Size of each partition
+        shifted_tensor = torch.reshape(a, [G*C, V]) #Initialize the shifted tensor
+        temp_tensor = torch.zeros(G*C, G*C)
+        
+        for i in range(G * C):
+            shift = torch.floor(self.adaptive_shift[i % C].item())
+            partial_shift = self.adaptive_shift[i%C].item() - torch.floor(self.adaptive_shift[i%C].item())
+            if shift*C + i >= 0 or shift*C + i < G * C:
+                temp_tensor[shift*C + i, i] = 1.0 * (1 - partial_shift)
+            if (shift + 1)*C + i >= 0 or (shift + 1)*C + i < G * C:
+                temp_tensor[(shift + 1)*C + i, i] = 1.0 * partial_shift
 
-            output_tensor_reshaped = pointwise_conv(shifted_tensor).view(N, G, C, V)
+        shifted_tensor = torch.matmul(temp_tensor, shifted_tensor).reshape([G, C, int(math.sqrt(V)), int(math.sqrt(V))]) # [9, 64, 5, 5]
+        
+        pointwise_conv = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(1, 1))
 
-            # sum temporally
-            # (C,H)
-            b = torch.sum(a, dim=(1))
-            outputs.append(b)
+        output_tensor_reshaped = pointwise_conv(shifted_tensor[-1]).view(1, C, V)
 
         # stack frame-wise tensors into the original length L
         # [(N,C,V)] -> (N,C,L,V)
-        return torch.stack(outputs, 2)
+        return output_tensor_reshaped
 
 
 class ObservedAggregateStgcn(nn.Module):
