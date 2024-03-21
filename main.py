@@ -237,6 +237,9 @@ def benchmark(rank, world_size, args):
 def main(args):
     """Entrypoint into the script that routes to the correct function."""
 
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '8888' 
+    
     # check user inputs using user logic
     assert_parameters(args)
 

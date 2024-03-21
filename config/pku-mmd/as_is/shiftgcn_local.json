@@ -1,6 +1,6 @@
 {
     "processor": {
-        "model": "rt-st-gcn",
+        "model": "shift-gcn",
         "data": "data/pku-mmdv1-subset",
         "dataset_type": "dir",
         "out": "pretrained_models/pku-mmdv1",
@@ -18,7 +18,7 @@
         "stages": 1,
         "kernel": 9,
         "output_type": "logits",
-        "rt-st-gcn": {
+        "shift-gcn": {
             "latency": false,
             "importance": true,
             "in_feat": 3,
