@@ -617,15 +617,15 @@ class AggregateStgcn(nn.Module):
             shift = torch.floor(self.adaptive_shift[i % C].item())
             partial_shift = self.adaptive_shift[i%C].item() - torch.floor(self.adaptive_shift[i%C].item())
             if shift*C + i >= 0 or shift*C + i < G * C:
-                temp_tensor[shift*C + i, i] = 1.0 * (1 - partial_shift)
+                temp_tensor[i, shift*C + i] = 1.0 * (1 - partial_shift)
             if (shift + 1)*C + i >= 0 or (shift + 1)*C + i < G * C:
-                temp_tensor[(shift + 1)*C + i, i] = 1.0 * partial_shift
+                temp_tensor[i, (shift + 1)*C + i] = 1.0 * partial_shift
 
         shifted_tensor = torch.matmul(temp_tensor, shifted_tensor).reshape([G, C, int(math.sqrt(V)), int(math.sqrt(V))]) # [9, 64, 5, 5]
         
         pointwise_conv = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(1, 1))
 
-        output_tensor_reshaped = pointwise_conv(shifted_tensor[-1]).view(1, C, V)
+        output_tensor_reshaped = pointwise_conv(shifted_tensor[4]).view(1, C, V)
 
         # stack frame-wise tensors into the original length L
         # [(N,C,V)] -> (N,C,L,V)
