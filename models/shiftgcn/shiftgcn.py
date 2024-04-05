@@ -571,7 +571,8 @@ class AggregateStgcn(nn.Module):
         self.fifo_size = fifo_size
         self.kernel_size = kernel_size
         self.fifo = torch.zeros(1, fifo_size, out_channels, graph.size(1), dtype=torch.float32)
-
+        self.adaptive_shift = nn.Parameter(torch.rand(out_channels)*(fifo_size))
+        
         # FIFO for intermediate Gamma graph frames after multiplication with adjacency matrices
         # (N,G,C,V) - (N)batch, (G)amma, (C)hannels, (V)ertices
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow

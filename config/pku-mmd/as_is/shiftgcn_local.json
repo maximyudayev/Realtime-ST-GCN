@@ -13,7 +13,7 @@
     },
     "arch": {
         "strategy": "spatial",
-        "segment": 250,
+        "receptive_field": 50,
         "in_feat": 3,
         "stages": 1,
         "kernel": 9,
