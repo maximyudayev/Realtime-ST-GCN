@@ -87,7 +87,7 @@ class Model(nn.Module):
         super(Model, self).__init__()
 
         # save the config arguments for model conversions
-        self.conf = kwargs['rt-st-gcn']
+        self.conf = kwargs['shift-gcn']
 
         # register the normalized adjacency matrix as a non-learnable saveable parameter in the top-level container
         # TODO: check if the buffer gets automatically quantized (relevant only for the size estimate)

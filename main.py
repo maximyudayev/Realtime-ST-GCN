@@ -1,3 +1,6 @@
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
+
 import torch
 
 from processor import Processor, setup, cleanup
@@ -6,7 +9,6 @@ from utils import LOSS, SEGMENT_GENERATOR, STATISTICS
 from utils import Parser
 from utils.metrics import F1Score, EditScore, ConfusionMatrix
 
-import os
 import random
 
 
@@ -183,8 +185,8 @@ def benchmark(rank, world_size, args):
 
     # get custom quantization details if the model needs any
     # maps custom quantization replacement modules
-    # args.arch['prepare_dict'] = Model.prepare_dict()
-    # args.arch['convert_dict'] = Model.convert_dict()
+    args.arch['prepare_dict'] = Model.prepare_dict()
+    args.arch['convert_dict'] = Model.convert_dict()
 
     # list metrics that Processor should record
     metrics = [
