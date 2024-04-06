@@ -374,7 +374,7 @@ class Processor:
         captures = F.pad(captures, (0, 0, P_start, P_end))
 
         # get the next segment corresponding to the model type and segmentation strategy
-        for i, (x, y, num_subsegments) in enumerate(self.segment_generator.get_segment(captures, labels)):
+        for i, (x, y, num_subsegments) in enumerate(self.segment_generator.get_segment(captures)):
             # the input tensor has shape (N, C, L, V): N-batch, V-nodes, C-channels, L-length
             # the output tensor has shape (N, C', L)
             predictions = self.model(x)

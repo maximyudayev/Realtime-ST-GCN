@@ -1,7 +1,7 @@
 {
     "processor": {
         "model": "st-gcn",
-        "data": "data/pku-mmdv1",
+        "data": "data/pku-mmdv1-subset",
         "dataset_type": "dir",
         "out": "pretrained_models/pku-mmdv1",
         "actions": "data/pku-mmdv1/actions.txt",
@@ -12,6 +12,7 @@
     "arch": {
         "strategy": "spatial",
         "receptive_field": 50,
+        "segment": 250,
         "in_feat": 3,
         "stages": 1,
         "output_type": "logits",

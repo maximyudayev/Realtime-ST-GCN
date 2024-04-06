@@ -4,12 +4,10 @@
         "data": "data/pku-mmdv1-subset",
         "dataset_type": "dir",
         "out": "pretrained_models/pku-mmdv1",
-        "backup": "pretrained_models/pku-mmdv1-backup",
         "actions": "data/pku-mmdv1/actions.txt",
         "graph": "data/skeletons/pku-mmd.json",
-        "demo": [1, 2, 3],
-        "iou_threshold": [0.1,0.25,0.5],
-        "backend": "x86"
+        "demo": [175,293,37],
+        "iou_threshold": [0.1,0.25,0.5]
     },
     "arch": {
         "strategy": "spatial",
@@ -17,14 +15,12 @@
         "segment": 250,
         "in_feat": 3,
         "stages": 1,
-        "kernel": 9,
         "output_type": "logits",
-        "normalization": "LayerNorm",
+        "normalization": "BatchNorm",
         "shift-gcn": {
             "latency": false,
             "importance": true,
             "in_feat": 3,
-            "buffer": 1,
             "stages": 1,
             "layers": 9,
             "kernel": 9,

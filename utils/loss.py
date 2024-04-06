@@ -23,6 +23,7 @@ class Loss:
         self.mse = nn.MSELoss(reduction='none')
 
     def __call__(self, i, predictions, ground_truth):        
+        print(predictions.size())
         # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
         # NOTE: subsegments have an overlap of 1 in outputs to enable correct MSE calculation, CE calculation should avoid double counting that frame
         ce = self.ce(self.foo(predictions if i==0 else predictions[:,:,1:]), ground_truth)

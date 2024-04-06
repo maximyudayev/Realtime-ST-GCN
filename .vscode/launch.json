@@ -10,7 +10,7 @@
             "args": [
                 "train",
                 "--config",
-                "config/pku-mmd/as_is/shiftgcn_local.json",
+                "config/pku-mmd/as_is/rtstgcn_local.json",
             ]
         },
         {
