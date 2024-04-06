@@ -316,7 +316,7 @@ class OfflineLayer(nn.Module):
                     segment - self.stride * i,
                     device=rank),
                 (i*self.stride,0,0,i*self.stride))
-
+        print(f"Toeplitz = {self.toeplitz.size()}")
         # convolution of incoming frame
         # (out_channels is a multiple of the partition number
         # to avoid for-looping over several partitions)
@@ -367,10 +367,11 @@ class OfflineLayer(nn.Module):
         x = x.permute(0,2,4,1,3)
         # single multiplication with the adjacency matrices (spatial selective addition, across partitions) 
         x = torch.matmul(x, self.A*self.edge_importance)
-
+    
         # sum temporally by multiplying features with the Toeplitz matrix
         # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L) 
         x = x.permute(0,2,3,4,1)
+
         x = torch.matmul(x, self.toeplitz)
         # sum across partitions (N,C,V,L)
         x = torch.sum(x, dim=(1))
@@ -379,7 +380,7 @@ class OfflineLayer(nn.Module):
 
         # normalize the output of the st-gcn operation and activate
         x = self.bn_relu(x)
-
+        print(f"X at the output = {x.size()}")
         # add the branches (main + residual), activate and dropout
         return self.do(x + res)
 

@@ -302,7 +302,7 @@ class OfflineLayer(nn.Module):
         self.kernel_size = kernel_size
 
         self.out_channels = out_channels
-
+        self.adaptive_shift = nn.Parameter(torch.rand(self.out_channels)*(segment))
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
         self.A = graph.clone().detach()
 
@@ -381,7 +381,6 @@ class OfflineLayer(nn.Module):
 
         # normalize the output of the st-gcn operation and activate
         x = self.bn_relu(x)
-
         # add the branches (main + residual), activate and dropout
         return self.do(x + res)
 
