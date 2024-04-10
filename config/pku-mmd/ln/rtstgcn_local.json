@@ -7,7 +7,7 @@
         "backup": "pretrained_models/pku-mmdv1-backup",
         "actions": "data/pku-mmdv1/actions.txt",
         "graph": "data/skeletons/pku-mmd.json",
-        "demo": [175,293,37],
+        "demo": [1,2,3],
         "iou_threshold": [0.1,0.25,0.5],
         "backend": "x86"
     },

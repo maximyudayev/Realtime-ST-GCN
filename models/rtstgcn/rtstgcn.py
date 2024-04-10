@@ -340,7 +340,7 @@ class OfflineLayer(nn.Module):
 
     def forward(self, x, A):
         _,_,L,_ = x.size()
-        device = x.get_device()
+        device = x.device
 
         # residual branch
         res = self.residual(x)

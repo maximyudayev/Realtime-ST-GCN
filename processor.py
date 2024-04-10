@@ -374,22 +374,24 @@ class Processor:
         captures = F.pad(captures, (0, 0, P_start, P_end))
 
         # get the next segment corresponding to the model type and segmentation strategy
-        for i, (x, y, num_subsegments) in enumerate(self.segment_generator.get_segment(captures)):
-            # the input tensor has shape (N, C, L, V): N-batch, V-nodes, C-channels, L-length
-            # the output tensor has shape (N, C', L)
-            predictions = self.model(x)
+        # for i, (x, y, num_subsegments) in enumerate(self.segment_generator.get_segment(captures, labels)):
+        x, y, num_subsegments = self.segment_generator.get_segment(captures, labels)
+        
+        # the input tensor has shape (N, C, L, V): N-batch, V-nodes, C-channels, L-length
+        # the output tensor has shape (N, C', L)
+        predictions = self.model(x)
 
-            # recombine results back into a time-series, corresponding to the segmentation strategy
-            predictions = self.segment_generator.mask_segment(L, P_start, P_end, predictions)
+        # recombine results back into a time-series, corresponding to the segmentation strategy
+        predictions = self.segment_generator.mask_segment(L, P_start, P_end, predictions)
 
-            # get the loss of the model
-            ce, mse = self.loss(i, predictions, y)
+        # get the loss of the model
+        ce, mse = self.loss(0, predictions, y)
 
-            # calculate the predictions statistics
-            top1_predicted, top5_predicted, top1_cor, top5_cor, tot = self.statistics(i, predictions, y)
+        # calculate the predictions statistics
+        top1_predicted, top5_predicted, top1_cor, top5_cor, tot = self.statistics(0, predictions, y)
 
-            # statistics for each segment of the trial
-            yield top1_predicted, top5_predicted, y, top1_cor, top5_cor, tot, ce/num_subsegments, mse/num_subsegments, None
+        # statistics for each segment of the trial
+        yield top1_predicted, top5_predicted, y, top1_cor, top5_cor, tot, ce/num_subsegments, mse/num_subsegments, None
 
 
     def _forward_rt(

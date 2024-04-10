@@ -36,8 +36,8 @@ class BufferSegment(Segment):
 
         return P_start, P_end
 
-    def get_segment(self, captures):
-        return captures.unfold(2,self.S,self.S-self.G).permute(0,2,1,4,3).contiguous().view(self.world_size,self.C,self.S,self.V)
+    def get_segment(self, captures, labels):
+        return captures.unfold(2,self.S,self.S-self.G).permute(0,2,1,4,3).contiguous().view(self.world_size,self.C,self.S,self.V), labels, 1
 
     def mask_segment(self, L, P_start, P_end, predictions):
         # clear the overlapping G predictions at the start of each subsegment (except the very first segment)
