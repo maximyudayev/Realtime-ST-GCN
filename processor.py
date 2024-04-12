@@ -15,6 +15,8 @@ import json
 import time
 import os
 
+import utils
+
 
 def _build_model(Model, rank, args):
     """Builds the selected ST-GCN model variant.
@@ -372,7 +374,7 @@ class Processor:
         P_start, P_end = self.segment_generator.pad_sequence(L)
 
         captures = F.pad(captures, (0, 0, P_start, P_end))
-
+        
         # get the next segment corresponding to the model type and segmentation strategy
         # for i, (x, y, num_subsegments) in enumerate(self.segment_generator.get_segment(captures, labels)):
         x, y, num_subsegments = self.segment_generator.get_segment(captures, labels)

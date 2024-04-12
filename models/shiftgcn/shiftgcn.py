@@ -300,6 +300,7 @@ class OfflineLayer(nn.Module):
         self.kernel_size = kernel_size
 
         self.out_channels = out_channels
+        self.adaptive_shift = nn.Parameter(torch.rand(out_channels) * self.kernel_size)
 
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
         # self.A = graph.clone().detach()
@@ -314,6 +315,7 @@ class OfflineLayer(nn.Module):
         # partition-wise convolution results are basically stacked across channel-dimension
         self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1)
 
+        self.temporal_conv = nn.Conv2d(in_channels=self.out_channels, out_channels=self.out_channels, kernel_size=(1, 1))
         # normalization and dropout on main branch
         self.bn_relu = nn.Sequential(
             LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False),
@@ -358,24 +360,41 @@ class OfflineLayer(nn.Module):
         x = torch.stack(x, -1)
         # change the dimension order for the correct broadcating of the adjacency matrix
         # (N,C,L,V,P) -> (N,L,P,C,V)
+
         x = x.permute(0,2,4,1,3)
+
+        N = x.size()[0]
+        L = x.size()[1]
+        P = x.size()[2]
+        C = x.size()[3]
+        V = x.size()[4]
+        G = self.kernel_size
+
         # single multiplication with the adjacency matrices (spatial selective addition, across partitions)
         x = torch.matmul(x, A*self.edge_importance)
 
-        # TODO: replace with unfold -> fold calls
-        # Toeplitz matrix for temporal accumulation that mimics FIFO behavior, but in batch on full sequence
-        toeplitz = torch.zeros(L, L, device=device)
-        for i in range(self.kernel_size//self.stride):
-            toeplitz += F.pad(
-                torch.eye(
-                    L - self.stride * i,
-                    device=device),
-                (i*self.stride,0,0,i*self.stride))
+        #x = x.permute(0, 2, 1, 3, 4) #(N,L,P,C,V) -> (N,P,L,C,V)
+        x = x.reshape([P, L*C, V])
 
-        # sum temporally by multiplying features with the Toeplitz matrix
-        # reorder dimensions for correct broadcasted multiplication (N,L,P,C,V) -> (N,P,C,V,L)
-        x = x.permute(0,2,3,4,1)
-        x = torch.matmul(x, toeplitz)
+        shifting_matrix = torch.zeros(G * C, G * C, device=device)
+        for i in range(G * C):
+            shift = math.floor(self.adaptive_shift[i % C].item())
+            partial_shift = self.adaptive_shift[i%C].item() - math.floor(self.adaptive_shift[i%C].item())
+            if shift*C + i >= 0 and shift*C + i < G * C:
+                shifting_matrix[i, shift*C + i] = 1.0 * (1 - partial_shift)
+            if (shift + 1)*C + i >= 0 and (shift + 1)*C + i < G * C:
+                shifting_matrix[i, (shift + 1)*C + i] = 1.0 * partial_shift
+        
+        out = torch.empty((P, L, C, V), device=device)
+        for j in range(P):
+            for i in range(0, L * C, C):
+                num_of_channels = x[j][i:i+(G*C)].shape[0]
+                shifted = torch.matmul(shifting_matrix[:num_of_channels, :num_of_channels], \
+                                        x[j][i:i+(G*C)]).view([int(G - ((G * C - num_of_channels) / C)), C, int(math.sqrt(V)), int(math.sqrt(V))])
+                out[j][int((i + 1) / C)] = self.temporal_conv(shifted[-1]).view([1, C, V])
+
+        print("SIU")
+        x = out.reshape([N,P,C,V,L])
         # sum across partitions (N,C,V,L)
         x = torch.sum(x, dim=(1))
         # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V)
@@ -384,6 +403,7 @@ class OfflineLayer(nn.Module):
         # normalize the output of the st-gcn operation and activate
         x = self.bn_relu(x)
 
+        print("SIU")
         # add the branches (main + residual), activate and dropout
         return self.do(x + res)
 
@@ -612,18 +632,18 @@ class AggregateStgcn(nn.Module):
         temp_tensor = torch.zeros(G*C, G*C)
         
         for i in range(G * C):
-            shift = torch.floor(self.adaptive_shift[i % C].item())
-            partial_shift = self.adaptive_shift[i%C].item() - torch.floor(self.adaptive_shift[i%C].item())
-            if shift*C + i >= 0 or shift*C + i < G * C:
+            shift = math.floor(self.adaptive_shift[i % C].item())
+            partial_shift = self.adaptive_shift[i%C].item() - math.floor(self.adaptive_shift[i%C].item())
+            if shift*C + i >= 0 and shift*C + i < G * C:
                 temp_tensor[i, shift*C + i] = 1.0 * (1 - partial_shift)
-            if (shift + 1)*C + i >= 0 or (shift + 1)*C + i < G * C:
+            if (shift + 1)*C + i >= 0 and (shift + 1)*C + i < G * C:
                 temp_tensor[i, (shift + 1)*C + i] = 1.0 * partial_shift
 
         shifted_tensor = torch.matmul(temp_tensor, shifted_tensor).reshape([G, C, int(math.sqrt(V)), int(math.sqrt(V))]) # [9, 64, 5, 5]
         
         pointwise_conv = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(1, 1))
 
-        output_tensor_reshaped = pointwise_conv(shifted_tensor[4]).view(1, C, V)
+        output_tensor_reshaped = pointwise_conv(shifted_tensor[-1]).view(1, C, V)
 
         # stack frame-wise tensors into the original length L
         # [(N,C,V)] -> (N,C,L,V)

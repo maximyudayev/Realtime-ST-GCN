@@ -22,7 +22,7 @@ SEGMENT_GENERATOR = {
     'ms-tcn': WindowSegmentOneToOneMultiStage,
     'ms-gcn': WindowSegmentMultiStage,
     'aa-gcn': WindowSegment,
-    'shift-gcn': WindowSegment,
+    'shift-gcn': BufferSegment,
     'shift-gcn++': WindowSegment
 }
 
