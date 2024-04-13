@@ -344,7 +344,7 @@ class OfflineLayer(nn.Module):
     def forward(self, x, A):
         _,_,L,_ = x.size()
         device = x.device
-
+        print(x.size())
         # residual branch
         res = self.residual(x)
 
@@ -391,9 +391,8 @@ class OfflineLayer(nn.Module):
                 num_of_channels = x[j][i:i+(G*C)].shape[0]
                 shifted = torch.matmul(shifting_matrix[:num_of_channels, :num_of_channels], \
                                         x[j][i:i+(G*C)]).view([int(G - ((G * C - num_of_channels) / C)), C, int(math.sqrt(V)), int(math.sqrt(V))])
-                out[j][int((i + 1) / C)] = self.temporal_conv(shifted[-1]).view([1, C, V])
-
-        print("SIU")
+                out[j][int(i / C)] = self.temporal_conv(shifted[-1]).view([C, V])
+                
         x = out.reshape([N,P,C,V,L])
         # sum across partitions (N,C,V,L)
         x = torch.sum(x, dim=(1))
@@ -403,7 +402,6 @@ class OfflineLayer(nn.Module):
         # normalize the output of the st-gcn operation and activate
         x = self.bn_relu(x)
 
-        print("SIU")
         # add the branches (main + residual), activate and dropout
         return self.do(x + res)
 
