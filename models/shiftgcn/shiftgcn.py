@@ -370,79 +370,43 @@ class OfflineLayer(nn.Module):
         V = x.size()[4]
         G = self.kernel_size
 
-        # single multiplication with the adjacency matrices (spatial selective addition, across partitions)
         x = torch.matmul(x, A*self.edge_importance)
 
-        # Calculate full and partial shifts
         full_shift = torch.floor(self.adaptive_shift).long()
         partial_shift = self.adaptive_shift - full_shift
 
-        # Create a repeat pattern for each element of the shift vectors
         full_shift_expanded = full_shift.unsqueeze(0).repeat(G, 1).view(G * C)
         partial_shift_expanded = partial_shift.unsqueeze(0).repeat(G, 1).view(G * C)
 
-        # Compute indices for matrix filling
         base_indices = torch.arange(G * C, device=device)
         target_indices = base_indices + full_shift_expanded * C
         target_indices_plus_one = base_indices + (full_shift_expanded + 1) * C
 
-        # Initialize the shifting matrix
-        shifting_matrix2 = torch.zeros(G * C, G * C, device=device)
+        shifting_matrix = torch.zeros(G * C, G * C, device=device)
 
-        # Set the values in the matrix using computed indices
         valid_mask = (target_indices >= 0) & (target_indices < G * C)
-        shifting_matrix2[base_indices[valid_mask], target_indices[valid_mask]] = 1 - partial_shift_expanded[valid_mask]
+        shifting_matrix[base_indices[valid_mask], target_indices[valid_mask]] = 1 - partial_shift_expanded[valid_mask]
 
         valid_mask_plus_one = (target_indices_plus_one >= 0) & (target_indices_plus_one < G * C)
-        shifting_matrix2[base_indices[valid_mask_plus_one], target_indices_plus_one[valid_mask_plus_one]] = partial_shift_expanded[valid_mask_plus_one]
-        
-        
+        shifting_matrix[base_indices[valid_mask_plus_one], target_indices_plus_one[valid_mask_plus_one]] = partial_shift_expanded[valid_mask_plus_one]
+                
         x = x.permute(0, 2, 1, 3, 4).squeeze(dim=0) #(N,L,P,C,V) -> (N,P,L,C,V) -> (P, L, C, V)
 
-        # Calculate the number of padding frames needed at the end to ensure all windows are of size G
-        padding_needed = max(0, G - (L % G)) if L % G != 0 else 0
+        pad = torch.zeros((P, G - 1, C, V), device=device)
+        x = torch.cat((x, pad), dim=1)
 
-        # Pad the tensor along the L dimension
-        if padding_needed > 0:
-            pad = torch.zeros((P, padding_needed, C, V), device=device)
-            x_padded = torch.cat((x, pad), dim=1)
-        else:
-            x_padded = x
+        x = x.unfold(dimension=1, size=G, step=1) 
+        x = x.permute(0, 1, 4, 2, 3).reshape(P, L, G * C, V) #(P,L,C,V,G) -> (P,L,G,C,V) -> (P, L, G*C, V)
 
-        # Now use unfold to create the windows
-        x_unfolded = x_padded.unfold(dimension=1, size=G, step=1) 
+        shifted = torch.matmul(shifting_matrix, x)
+        shifted = shifted.reshape(P, L, G, C, V).reshape(P * L, G*C, int(math.sqrt(V)), int(math.sqrt(V))) # (P, L, G*C, V) -> (P, L, G, C, V) -> (P*L, G*C, sqrt(V), sqrt(V))
+        out = self.pointwise_conv(shifted[:, -(C):])
+        x = out.reshape([P, L, C, V]).unsqueeze(dim=0)
 
-        # Now reshape to merge G and C dimensions
-        x_transformed = x_unfolded.permute(0, 1, 4, 2, 3).reshape(P, L, G * C, V) #(P,L,C,V,G) -> (P,L,G,C,V) -> (P, L, G*C, V)
-
-        shifted2 = torch.matmul(shifting_matrix2, x_transformed[0, 0])
-        shifted2 = shifted2.reshape(P, L, G, C, V).reshape(P * L, G*C, int(math.sqrt(V)), int(math.sqrt(V))) # (P, L, G*C, V) -> (P, L, G, C, V) -> (P*L, G*C, sqrt(V), sqrt(V))
-        out2 = self.pointwise_conv(shifted2[:, -64:])
-        x_transformed = out2.reshape([P, L, C, V]).unsqueeze()
-        
-        # shifting_matrix = torch.zeros(G * C, G * C, device=device)
-        # for i in range(G * C):
-        #     shift = math.floor(self.adaptive_shift[i % C].item())
-        #     partial_shift = self.adaptive_shift[i%C].item() - shift
-        #     if shift*C + i >= 0 and shift*C + i < G * C:
-        #         shifting_matrix[i][shift*C + i] = 1.0 * (1 - partial_shift)
-        #     if (shift + 1)*C + i >= 0 and (shift + 1)*C + i < G * C:
-        #         shifting_matrix[i][(shift + 1)*C + i] = 1.0 * partial_shift
-
-        # x = x.reshape([P, L*C, V])
-        # out = torch.empty((P, L, C, V), device=device)
-        # for j in range(P):
-        #     for i in range(0, L * C, C):
-        #         num_of_channels = x[j][i:i+(G*C)].shape[0]
-        #         shifted = torch.matmul(shifting_matrix[:num_of_channels, :num_of_channels], \
-        #                                 x[j][i:i+(G*C)]).reshape([int(G - ((G * C - num_of_channels) / C)), C, int(math.sqrt(V)), int(math.sqrt(V))])
-        #         out[j][int((i+1) / C)] = self.pointwise_conv(shifted[-1]).reshape([C, V])
-                
-        x = out2.reshape([N,P,L,C,V])
-        # sum across partitions (N,C,V,L)
+        # sum across partitions (N,L,C,V)
         x = torch.sum(x, dim=(1))
-        # match the dimension ordering of the input (N,C,V,L) -> (N,C,L,V)
-        x = x.permute(0,1,3,2)
+        # match the dimension ordering of the input (N,L,C,V) -> (N,C,L,V)
+        x = x.permute(0,2,1,3)
 
         # normalize the output of the st-gcn operation and activate
         x = self.bn_relu(x)
