@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.quantized as nnq
 import torch.nn.functional as F
 from models.utils import ConvTemporalGraphical, Graph, LayerNorm, BatchNorm1d
 
@@ -41,7 +42,6 @@ class Model(nn.Module):
         spatial_kernel_size = kwargs['graph']['num_node']
         temporal_kernel_size = conf['kernel']
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
-        num_frames = kwargs['receptive_field']
         self.dilation = conf['dilation'][-1]
 
         self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
@@ -56,15 +56,12 @@ class Model(nn.Module):
                 kernel_size=kernel_size,
                 partitions=A.size(0),
                 num_joints=A.size(1),
-                num_frames=num_frames,
                 stride=conf['stride'][i],
                 dilation=conf['dilation'][i],
                 residual=not not conf['residual'][i],
                 dropout=conf['dropout'][i],
                 normalization=kwargs['normalization'])
             for i in range(conf['layers'])])
-
-        self.cache = torch.zeros(1, conf['out_ch'][-1], num_frames, A.size(1))
 
         # initialize parameters for edge importance weighting
         if conf['importance']:
@@ -93,15 +90,17 @@ class Model(nn.Module):
         for gcn, importance in zip(self.gcn_networks, self.edge_importance):
             x = gcn(x, self.A * importance)
 
-        self.cache = torch.cat((self.cache[:,:,1:], x), dim=2)
-
         # global pooling (across time L, and nodes V)
-        x = F.avg_pool2d(self.cache[:,:,::self.dilation], self.cache[:,:,::self.dilation].size()[2:])
+        x = F.avg_pool2d(x, x.size()[2:])
 
         # prediction
         x = self.fcn_out(x)
 
         return x.squeeze(-1)
+
+
+    def prepare_benchmark(self, arch_conf):
+        return arch_conf
 
 
 class StgcnLayer(nn.Module):
@@ -132,7 +131,6 @@ class StgcnLayer(nn.Module):
         kernel_size,
         partitions,
         num_joints,
-        num_frames,
         stride=1,
         dilation=1,
         dropout=0,
@@ -147,6 +145,14 @@ class StgcnLayer(nn.Module):
         self.gamma = kernel_size[0]
         self.stride = stride
         self.dilation = dilation
+        self.fifo_size = stride*(self.gamma-1)+1
+
+        # number of input frames, before pooling (due to strided convolution)
+        self.fifo = torch.zeros(1, out_channels, self.fifo_size, num_joints, dtype=torch.float32)
+        self.fifo_res = torch.zeros(1, out_channels, self.fifo_size, num_joints, dtype=torch.float32)
+
+        self.is_residual = residual
+        self.is_residual_conv = residual and not ((in_channels == out_channels) and (stride == 1))
 
         self.gcn = ConvTemporalGraphical(
             in_channels,
@@ -154,43 +160,52 @@ class StgcnLayer(nn.Module):
             kernel_size[1],
             partitions)
 
-        # number of input frames, before pooling (due to strided convolution)
-        self.cache = torch.zeros(1, out_channels, num_frames, num_joints)
-
         self.tcn = nn.Sequential(
             LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.ReLU(inplace=True),
             nn.Conv2d(
                 out_channels,
                 out_channels,
-                (kernel_size[0], 1)),
+                (kernel_size[0], 1),
+                dilation=(stride, 1),
+                padding='valid'),
             LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.Dropout(dropout, inplace=True))
 
-        if not residual:
-            self.residual = lambda x: 0
-        elif (in_channels == out_channels) and (stride == 1):
-            self.residual = lambda x: x
-        else:
+        # residual branch
+        if self.is_residual_conv:
             self.residual = nn.Sequential(
                 nn.Conv2d(
                     in_channels,
                     out_channels,
                     kernel_size=1),
                 LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False))
+        else:
+            self.residual = nn.Identity()
 
+        # functional quantizeable module for the addition of branches
+        self.functional_add = nnq.FloatFunctional()
+        self.functional_mul_zero = nnq.FloatFunctional()
         self.relu = nn.ReLU(inplace=True)
 
 
     def forward(self, x, A):
-        res = self.residual(x)
+        # residual branch
+        # add delay and another fifo
+        if not self.is_residual:
+            res = self.functional_mul_zero.mul_scalar(x, 0.0)
+        else:
+            res = self.residual(x)
+
+        self.fifo_res = torch.cat((res, self.fifo_res[:,:,:-1]), dim=2)
+        
         # graph convolution
         x = self.gcn(x, A)
 
         # push data into the buffer
-        self.cache = torch.cat((self.cache[:,:,1:], x), dim=2)
+        self.fifo = torch.cat((x, self.fifo[:,:,:-1]), dim=2)
 
         # temporal accumulation (but using a learnable kernel)
-        x = self.tcn(self.cache[:,:,-(self.dilation*(self.gamma-1)+1)::self.dilation])
+        x = self.tcn(self.fifo)
 
-        return self.relu(x + res)
+        return self.relu(self.functional_add.add(x, self.fifo_res[:,:,self.gamma//2:self.gamma//2+1]))

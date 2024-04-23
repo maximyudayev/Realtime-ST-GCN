@@ -1,7 +1,7 @@
 {
     "processor": {
         "model": "st-gcn",
-        "data": "data/pku-mmdv1",
+        "data": "data/pku-mmd",
         "dataset_type": "dir",
         "out": "pretrained_models/pku-mmdv1",
         "actions": "data/pku-mmdv1/actions.txt",
@@ -12,6 +12,7 @@
     "arch": {
         "strategy": "spatial",
         "receptive_field": 50,
+        "segment": 1000,
         "in_feat": 3,
         "stages": 1,
         "output_type": "logits",
@@ -22,12 +23,12 @@
             "in_feat": 3,
             "stages": 1,
             "layers": 9,
-            "kernel": 9,
+            "kernel": 69,
             "in_ch": [64,64,64,64,128,128,128,256,256],
             "out_ch": [64,64,64,128,128,128,256,256,256],
             "stride": [1,1,1,2,1,1,2,1,1],
             "residual": [1,1,1,1,1,1,1,1,1],
-            "dropout": [0,0,0,0,0,0,0,0,0]
+            "dropout": [0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]
         }
     },
     "optimizer": {

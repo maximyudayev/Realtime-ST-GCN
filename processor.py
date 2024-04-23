@@ -407,19 +407,24 @@ class Processor:
         latency = 0
         predictions = self.segment_generator.alloc_output(L, dtype=captures.dtype)
 
+        # pad the sequence according to the model type
+        P_start, P_end = self.segment_generator.pad_sequence_rt(L)
+
+        captures = F.pad(captures, (0, 0, P_start, P_end))
+
         # generate results for the consumer (effectively limits processing burden by splitting long sequence into manageable independent overlapping chunks)
-        for i in range(L):
+        for i, data in enumerate(self.segment_generator.get_segment_rt(captures)):
             start_time = time.time()
-            predictions[:,:,i:i+1] = self.model(captures[:,:,i:i+1])
+            predictions[:,:,i:i+1] = self.model(data)
             latency += (time.time() - start_time)
 
         # get the loss of the model
-        ce, mse = self.loss(predictions, labels)
+        ce, mse = self.loss(0, predictions, labels)
 
         # calculate the predictions statistics
-        top1_predicted, top5_predicted, top1_cor, top5_cor, tot = self.statistics(predictions, labels)
+        top1_predicted, top5_predicted, top1_cor, top5_cor, tot = self.statistics(0, predictions, labels)
 
-        return top1_predicted, top5_predicted, labels, top1_cor, top5_cor, tot, ce, mse, latency/L
+        yield top1_predicted, top5_predicted, labels, top1_cor, top5_cor, tot, ce, mse, latency/L
 
 
     def _test(
@@ -878,11 +883,10 @@ class Processor:
 
         # replace trainable layers of the proposed model with quantizeable inference-only version
         # TODO: extend to other models and call using meaningful common method name
-        # self.model._swap_layers_for_inference()
-        # self.model.eval_()
+        arch_conf = self.model.prepare_benchmark(arch_conf)
 
         self.model.eval()
-
+        self.model = torch.jit.script(self.model)
         # measure FP32 latency on CPU
         _, _, _, _, latency_fp32 = self._test(
             dataloader=dataloader,

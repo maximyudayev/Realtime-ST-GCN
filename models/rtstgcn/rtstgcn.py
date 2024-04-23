@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.quantized as nnq
 import torch.nn.functional as F
 from models.utils import Graph, LayerNorm, BatchNorm1d
-from torch.ao.quantization import QuantStub, DeQuantStub
 
 
 class Model(nn.Module):
@@ -133,9 +132,6 @@ class Model(nn.Module):
             out_channels=kwargs['num_classes'],
             kernel_size=1)
 
-        self.quant = QuantStub()
-        self.dequant = DeQuantStub()
-
 
     def forward(self, x):
         # data normalization
@@ -189,13 +185,18 @@ class Model(nn.Module):
 
         return
 
+    
+    def prepare_benchmark(self, arch_conf):
+        self._swap_layers_for_inference()
 
-    def eval_(self):
-        for module in self.st_gcn: module.eval_()
-        return
+        for module in self.st_gcn: module._prepare_benchmark()
+
+        arch_conf['prepare_dict'] = self._prepare_dict()
+        arch_conf['convert_dict'] = self._convert_dict()
+        return arch_conf
 
 
-    def prepare_dict():
+    def _prepare_dict(self):
         return {
             "float_to_observed_custom_module_class": {
                 "static": {
@@ -205,7 +206,7 @@ class Model(nn.Module):
         }
 
 
-    def convert_dict():
+    def _convert_dict(self):
         return {
             "observed_to_quantized_custom_module_class": {
                 "static": {
@@ -523,7 +524,7 @@ class OnlineLayer(nn.Module):
         return
 
 
-    def forward(self, x):
+    def forward(self, x, A):
         """
         In case of buffered realtime processing, Conv2D and MMUL are done on the buffered frames,
         which mimics the kernels reuse mechanism that would be followed in hardware at the expense
@@ -567,15 +568,22 @@ class AggregateStgcn(nn.Module):
         super(AggregateStgcn, self).__init__()
 
         self.out_channels = out_channels
+        self.num_joints = graph.shape[1]
         self.stride = stride
         self.fifo_size = fifo_size
         self.kernel_size = kernel_size
-        self.fifo = torch.zeros(1, fifo_size, out_channels, graph.size(1), dtype=torch.float32)
+        self.fifo = torch.zeros(1, out_channels, fifo_size, graph.size(1), dtype=torch.float32)
+        self.accumulator = torch.zeros(1, out_channels, stride, graph.size(1), dtype=torch.float32)
+        self.fifo_idx = 0
+        self.accumulator_idx = 0
+        
+        # functional quantizeable module for the addition of branches
+        self.functional_add = nnq.FloatFunctional()
+        self.functional_sub = nnq.FloatFunctional()
 
         # FIFO for intermediate Gamma graph frames after multiplication with adjacency matrices
         # (N,G,C,V) - (N)batch, (G)amma, (C)hannels, (V)ertices
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
-        # self.A = torch.tensor(graph, dtype=torch.float32, requires_grad=False)
         self.A = graph.clone().detach()
 
 
@@ -594,26 +602,28 @@ class AggregateStgcn(nn.Module):
         x = x.permute(0,2,4,1,3)
         # single multiplication with the adjacency matrices (spatial selective addition, across partitions)
         x = torch.matmul(x, self.A)
+        # frame, summed across partitions
+        x = x.sum(dim=2).view(1, self.out_channels, 1, self.num_joints)
+        
+        # update the accumulator - add new frame (enqueued) and subtract the oldest (dequeued)
+        # (number of accumulators is equal to `stride`)
+        self.accumulator[:,:,self.accumulator_idx:self.accumulator_idx+1] = self.functional_add.add(self.accumulator[:,:,self.accumulator_idx:self.accumulator_idx+1], x)
+        self.accumulator[:,:,self.accumulator_idx] = self.functional_sub.add(self.accumulator[:,:,self.accumulator_idx], -self.fifo[:,:,self.fifo_idx])
+        
+        # self.accumulator[:,:,self.accumulator_idx] += x - self.fifo[:,:,-1:]
+        # self.fifo = torch.cat((x, self.fifo[:,:,:-1]), dim=2) 
 
-        # perform temporal accumulation for each of the buffered frames
-        # (portability for buffered_realtime setup, for realtime, the buffer is of size 1)
-        outputs = []
-        for i in range(x.shape[1]):
-            # push the frame, summed across partitions, into the FIFO
-            self.fifo = torch.cat((x.sum(dim=2)[:,i:i+1], self.fifo[:,:self.fifo_size-1]), 1)
+        # save output before updating the indices
+        output = self.accumulator[:,:,self.accumulator_idx:self.accumulator_idx+1]
 
-            # slice the tensor according to the temporal stride size
-            # (if stride is 1, returns the whole tensor itself)
-            a = self.fifo[:,range(0, self.fifo_size, self.stride)]
+        # enque the newest in place of the oldest sample
+        self.fifo[:,:,self.fifo_idx:self.fifo_idx+1] = x
+        
+        # update the indices
+        self.accumulator_idx = (self.accumulator_idx+1)%self.stride
+        self.fifo_idx = (self.fifo_idx+1)%self.fifo_size
 
-            # sum temporally
-            # (C,H)
-            b = torch.sum(a, dim=(1))
-            outputs.append(b)
-
-        # stack frame-wise tensors into the original length L
-        # [(N,C,V)] -> (N,C,L,V)
-        return torch.stack(outputs, 2)
+        return output
 
 
 class ObservedAggregateStgcn(nn.Module):

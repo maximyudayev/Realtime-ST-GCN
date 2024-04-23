@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.quantized as nnq
 import torch.nn.functional as F
 from models.utils import ConvTemporalGraphical, Graph, LayerNorm, BatchNorm1d
 
@@ -96,6 +97,10 @@ class Model(nn.Module):
         return x.squeeze(-1)
 
 
+    def prepare_benchmark(self, arch_conf):
+        return arch_conf
+
+
 class StgcnLayer(nn.Module):
     """Applies a spatial temporal graph convolution over an input graph sequence.
     Args:
@@ -134,6 +139,8 @@ class StgcnLayer(nn.Module):
         assert len(kernel_size) == 2
         assert kernel_size[0] % 2 == 1
         padding = (((kernel_size[0] - 1) // 2), 0)
+        self.is_residual = residual
+        self.is_residual_conv = residual and not ((in_channels == out_channels) and (stride == 1))
 
         self.gcn = ConvTemporalGraphical(
             in_channels,
@@ -153,11 +160,8 @@ class StgcnLayer(nn.Module):
             LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.Dropout(dropout, inplace=True))
 
-        if not residual:
-            self.residual = lambda x: 0
-        elif (in_channels == out_channels) and (stride == 1):
-            self.residual = lambda x: x
-        else:
+        # residual branch
+        if self.is_residual_conv:
             self.residual = nn.Sequential(
                 nn.Conv2d(
                     in_channels,
@@ -165,15 +169,25 @@ class StgcnLayer(nn.Module):
                     kernel_size=1,
                     stride=(stride, 1)),
                 LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False))
+        else:
+            self.residual = nn.Identity()
 
+        # functional quantizeable module for the addition of branches
+        self.functional_add = nnq.FloatFunctional()
+        self.functional_mul_zero = nnq.FloatFunctional()
         self.relu = nn.ReLU(inplace=True)
 
 
     def forward(self, x, A):
-        res = self.residual(x)
+        # residual branch
+        if not self.is_residual:
+            res = self.functional_mul_zero.mul_scalar(x, 0.0)
+        else:
+            res = self.residual(x)
+
         # graph convolution
         x = self.gcn(x, A)
         # temporal accumulation (but using a learnable kernel)
         x = self.tcn(x)
 
-        return self.relu(x + res)
+        return self.relu(self.functional_add.add(x, res))

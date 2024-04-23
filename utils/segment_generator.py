@@ -36,8 +36,16 @@ class BufferSegment(Segment):
 
         return P_start, P_end
 
+    def pad_sequence_rt(self, L):
+        self.L = L
+        return 0, 0
+
     def get_segment(self, captures):
         return captures.unfold(2,self.S,self.S-self.G).permute(0,2,1,4,3).contiguous().view(self.world_size,self.C,self.S,self.V)
+    
+    def get_segment_rt(self, captures):
+        for i in range(self.L):
+            yield captures[:,:,i:i+1]
 
     def mask_segment(self, L, P_start, P_end, predictions):
         # clear the overlapping G predictions at the start of each subsegment (except the very first segment)
@@ -73,6 +81,14 @@ class WindowSegment(Segment):
 
         return P_start, P_end
 
+    def pad_sequence_rt(self, L):
+        # pad the start by the receptive field size (emulates empty buffer)
+        P_start = self.W-1
+        P_end = 0
+        self.L = L
+
+        return P_start, P_end
+
     def get_segment(self, captures, labels):
         num_segments = (self.S+self.S%self.subsegment_size)//self.subsegment_size
         segments = ((
@@ -87,6 +103,10 @@ class WindowSegment(Segment):
                 captures[:,:,startX:endX].unfold(2, self.W, 1).permute(0,2,1,4,3).contiguous().view(endX-startX-(self.W-1), self.C, self.W, self.V), \
                 labels[:,startY:endY], \
                 num_segments
+
+    def get_segment_rt(self, captures):
+        for i in range(self.L):
+            yield captures[:,:,i:i+self.W]
 
     def mask_segment(self, L, P_start, P_end, predictions):
         # arrange tensor back into a time series

@@ -17,7 +17,7 @@ LOSS = {
 
 SEGMENT_GENERATOR = {
     'st-gcn': WindowSegment,
-    'co-st-gcn': WindowSegment,
+    'co-st-gcn': BufferSegment,
     'rt-st-gcn': BufferSegment,
     'ms-tcn': WindowSegmentOneToOneMultiStage,
     'ms-gcn': WindowSegmentMultiStage,
