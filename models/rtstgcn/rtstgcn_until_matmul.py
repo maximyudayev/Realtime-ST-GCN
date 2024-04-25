@@ -3,7 +3,8 @@ import torch.nn as nn
 import torch.nn.quantized as nnq
 import torch.nn.functional as F
 from models.utils import Graph, LayerNorm, BatchNorm1d
-from torch.ao.quantization import QuantStub, DeQuantStub
+# from torch.ao.quantization import QuantStub, DeQuantStub
+import numpy as np
 
 
 class Model(nn.Module):
@@ -93,38 +94,49 @@ class Model(nn.Module):
         # register the normalized adjacency matrix as a non-learnable saveable parameter in the top-level container
         # TODO: check if the buffer gets automatically quantized (relevant only for the size estimate)
         self.graph = Graph(strategy=kwargs['strategy'], **kwargs['graph'])
-        A = torch.tensor(self.graph.A, dtype=torch.float32, device=rank, requires_grad=False)
-        self.register_buffer('A', A)
-
+        # print("graph below")
+        # print(self.graph.__str__())
+        # print(self.graph.__str__().shape)
+        # print("graph ended")  
+        A1 = torch.tensor(self.graph.A[0:1], dtype=torch.float32, device=rank, requires_grad=False).reshape(625)
+        A2 = torch.tensor(self.graph.A[1:2], dtype=torch.float32, device=rank, requires_grad=False).reshape(625)
+        A3 = torch.tensor(self.graph.A[2:3], dtype=torch.float32, device=rank, requires_grad=False).reshape(625)
+        self.register_buffer('A1', A1)
+        self.register_buffer('A2', A2)
+        self.register_buffer('A3', A3)
+        print("Shape of A1 is: ", A1.shape)
         # input capture normalization
         # (N,C,L,V)
-        self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
+        # self.norm_in = LayerNorm([kwargs['in_feat'], 1, A1.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
 
         # fcn for feature remapping of input to the network size
         self.fcn_in = nn.Conv2d(in_channels=self.conf['in_feat'], out_channels=self.conf['in_ch'][0], kernel_size=1)
-
+        print("NUM JOINTS IS: ", kwargs['graph']['num_node'])
         # stack of ST-GCN layers
         stack = [
             OfflineLayer(
-                num_joints=kwargs['graph']['num_node'],
-                in_channels=self.conf['in_ch'][i],
-                out_channels=self.conf['out_ch'][i],
-                kernel_size=self.conf['kernel'],
-                stride=self.conf['stride'][i],
-                num_partitions=self.A.shape[0],
+                num_joints=kwargs['graph']['num_node'], #25
+                in_channels=self.conf['in_ch'][i],          # 64,64,64,64,128,128,128,256,256
+                out_channels=self.conf['out_ch'][i],        # 64,64,64,128,128,128,256,256,256
+                kernel_size=self.conf['kernel'],            # 9
+                stride=self.conf['stride'][i],              # 1,1,1,2,1,1,2,1,1      stride*(kernel_size-1)+1 
+                num_partitions=3,             
                 residual=not not self.conf['residual'][i],
-                dropout=self.conf['dropout'][i],
-                importance=self.conf['importance'],
-                graph=self.A,
+                dropout=self.conf['dropout'][i],            # 0,0,0,0,0,0,0,0,0
+                importance=self.conf['importance'],         # True
+                graph1=self.A1,
+                graph2=self.A2,
+                graph3=self.A3,
                 rank=rank,
-                normalization=kwargs['normalization'])
-            for i in range(self.conf['layers'])]
+                normalization=kwargs['normalization'])      # LayerNorm
+            for i in range(self.conf['layers'])] # 9 layers
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
-        self.st_gcn = nn.Sequential(*stack)
-
+        self.st_gcn = nn.ModuleList(stack)
+        
         # global pooling
         # converts (N,C,L,V) -> (N,C,L,1)
+        
         self.avg_pool = nn.AvgPool2d(kernel_size=(1, kwargs['graph']['num_node']))
 
         # fcn for prediction
@@ -134,29 +146,23 @@ class Model(nn.Module):
             out_channels=kwargs['num_classes'],
             kernel_size=1)
 
-        self.quant = QuantStub()
-        self.dequant = DeQuantStub()
+        # self.quant = QuantStub()
+        # self.dequant = DeQuantStub()
 
 
     def forward(self, x):
         # data normalization
-        x = self.norm_in(x)
-
+        # x = self.norm_in(x)
         # remap the features to the network size
         x = self.fcn_in(x)
 
+        print("shape after fcn: ", x.shape)
+
         # feed the frame into the ST-GCN block backbone
-        x = self.st_gcn(x)
-
-        # pool the output frame for a single feature vector
-        x = self.avg_pool(x)
-
-        # remap the feature vector to class predictions
-        x = self.fcn_out(x)
-
-       # removes the last dimension (node dimension) of size 1: (N,C,L,1) -> (N,C,L)
-        x = x.squeeze(-1)
-
+        for gcn in self.st_gcn:
+            x = gcn(x, self.A1, self.A2, self.A3)
+        # x = self.st_gcn(x, self.A1, self.A2, self.A3)
+        print(x)
         return x
 
 
@@ -164,22 +170,23 @@ class Model(nn.Module):
         # stack of ST-GCN layers
         stack = [
             OnlineLayer(
-                num_joints=self.A.shape[-1],
-                fifo_latency=self.conf['latency'],
+                num_joints=25,
+                # fifo_latency=self.conf['latency'],
                 in_channels=self.conf['in_ch'][i],
                 out_channels=self.conf['out_ch'][i],
                 kernel_size=self.conf['kernel'],
                 stride=self.conf['stride'][i],
-                num_partitions=self.A.shape[0],
+                num_partitions=3,
                 residual=not not self.conf['residual'][i],
                 dropout=self.conf['dropout'][i],
                 importance=self.conf['importance'],
-                graph=self.A)
+                graph1=self.A1,
+                graph2=self.A2,
+                graph3=self.A3)
             for i in range(self.conf['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
         new_st_gcn = nn.Sequential(*stack)
-
         # copy parameters from the batch trained model into the RT version
         # user must ensure that all necessary updates are made on conversion between the two different architectures
         new_st_gcn.load_state_dict(self.st_gcn.state_dict(), strict=False)
@@ -194,26 +201,6 @@ class Model(nn.Module):
         for module in self.st_gcn: module.eval_()
         return
     
-    
-    def prepare_dict():
-        return {
-            "float_to_observed_custom_module_class": {
-                "static": {
-                    AggregateStgcn: ObservedAggregateStgcn,
-                }
-            }
-        }
-    
-
-    def convert_dict():
-        return {
-            "observed_to_quantized_custom_module_class": {
-                "static": {
-                    ObservedAggregateStgcn: QAggregateStgcn,
-                }
-            }
-        }
-
 
 class OfflineLayer(nn.Module):
     """[Training] Applies a spatial temporal graph convolution over an input graph sequence.
@@ -257,7 +244,9 @@ class OfflineLayer(nn.Module):
         dropout,
         residual,
         importance,
-        graph,
+        graph1,
+        graph2,
+        graph3,
         rank,
         normalization='LayerNorm'):
         """
@@ -303,10 +292,13 @@ class OfflineLayer(nn.Module):
         self.out_channels = out_channels
 
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
-        self.A = graph.clone().detach()
+        self.A1 = graph1.clone().detach()
+        self.A2 = graph2.clone().detach()
+        self.A3 = graph3.clone().detach()
+        # self.A = graph.clone().detach()
 
         # learnable edge importance weighting matrices (each layer, separate weighting)
-        self.edge_importance = nn.Parameter(torch.ones(num_partitions,num_joints,num_joints,device=rank), requires_grad=True) if importance else 1
+        self.edge_importance = nn.Parameter(torch.ones(num_partitions,num_joints*num_joints,device=rank), requires_grad=False) if importance else 1
 
         # convolution of incoming frame
         # (out_channels is a multiple of the partition number
@@ -339,7 +331,7 @@ class OfflineLayer(nn.Module):
                 nn.Dropout(dropout))
 
 
-    def forward(self, x):
+    def forward(self, x, A1, A2, A3):
         _,_,L,_ = x.size()
         # residual branch
         res = self.residual(x)
@@ -352,6 +344,10 @@ class OfflineLayer(nn.Module):
         # (convolution output contains all partitions, stacked across the channel dimension) 
         # split into separate 4D tensors, each corresponding to a separate partition 
         x = torch.split(x, self.out_channels, dim=1)
+        # Create a tuple from the list
+        x = tuple(x) 
+
+        print("type: ", type(x))  # This will print the type of the container holding the split tensors
         # concatenate these 4D tensors across the partition dimension
         x = torch.stack(x, -1)
         # change the dimension order for the correct broadcating of the adjacency matrix 
@@ -428,7 +424,9 @@ class OnlineLayer(nn.Module):
         dropout,
         residual,
         importance,
-        graph):
+        graph1,
+        graph2,
+        graph3):
         """
         Args:
             in_channels : ``int``
@@ -467,63 +465,55 @@ class OnlineLayer(nn.Module):
         # assert len(kernel_size) == 1
         assert kernel_size % 2 == 1
 
-        # self.num_partitions = num_partitions
-        # self.num_joints = num_joints
-
-        fifo_size = stride*(kernel_size-1)+1
         self.is_residual = residual
         self.is_residual_noconv = residual and (in_channels == out_channels) and (stride == 1)
 
         # learnable edge importance weighting matrices (each layer, separate weighting)
         # just a placeholder for successful load_state_dict() from <StgcnLayer>._swap_layers_for_inference()
-        self.edge_importance = nn.Parameter(torch.ones(num_partitions,num_joints,num_joints), requires_grad=False) if importance else 1
+        self.edge_importance = nn.Parameter(torch.ones(num_partitions, num_joints* num_joints), requires_grad=False) if importance else 1
 
-        # convolution of incoming frame
-        # (out_channels is a multiple of the partition number
-        # to avoid for-looping over several partitions)
-        # partition-wise convolution results are basically stacked across channel-dimension
-        # self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1, bias=False)
-        self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1)
+        # 3 separate convolutions of incoming frame
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.conv2 = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.conv3 = nn.Conv2d(in_channels, out_channels, kernel_size=1)
 
-        # non-traceable natively spatial and temporal aggregation of remapped node features
-        # split into a separate module for the quantizaiton workflow
-        self.aggregate = AggregateStgcn(graph, fifo_size, kernel_size, out_channels, stride)
+        self.A1 = torch.tensor(graph1, dtype=torch.float32, requires_grad=False)
+        self.A2 = torch.tensor(graph2, dtype=torch.float32, requires_grad=False)
+        self.A3 = torch.tensor(graph3, dtype=torch.float32, requires_grad=False)
+
+        self.conv1x1 = nn.Conv2d(9, 1, kernel_size=(1, 1), stride=1, padding=0, bias=False)
+        self.conv1x1_weights = torch.ones_like(self.conv1x1.weight)
+        self.conv1x1.weight = nn.Parameter(self.conv1x1_weights)
 
         # normalization and dropout on main branch
         self.bn_relu = nn.Sequential(
-            LayerNorm([out_channels, 1, num_joints]),
+            # LayerNorm([out_channels, 1, num_joints]),
             nn.ReLU())
 
         # residual branch
         if residual and not ((in_channels == out_channels) and (stride == 1)):
+            print("About to do conv and LN")
             self.residual = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
-                LayerNorm([out_channels, 1, num_joints]),
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
+                # LayerNorm([out_channels, 1, num_joints]),
             )
         else:
+            print("About to do nn.Identity")
             self.residual = nn.Identity()
 
         # functional quantizeable module for the addition of branches
         self.functional_add = nnq.FloatFunctional()
         self.functional_mul_zero = nnq.FloatFunctional()
 
-        # activation of branch sum
-        # if no resnet connection, prevent ReLU from being applied twice
-        if not residual:
-            self.do = nn.Dropout(dropout)
-        else:
-            self.do = nn.Sequential(
-                nn.ReLU(),
-                nn.Dropout(dropout))
-
 
     def eval_(self):
         # eval is called after OfflineLayer was switched for OnlineLayer with load_state_dict()
-        self.aggregate.A *= self.edge_importance
+        # self.aggregate.A *= self.edge_importance #REPLACE THIS WITH ?
+        # self.aggregate1.A
         return
 
 
-    def forward(self, x):
+    def forward(self, x, A1, A2, A3):
         """
         In case of buffered realtime processing, Conv2D and MMUL are done on the buffered frames,
         which mimics the kernels reuse mechanism that would be followed in hardware at the expense
@@ -532,196 +522,25 @@ class OnlineLayer(nn.Module):
 
         # residual branch
         if not self.is_residual:
+            print("in not self.is_residual")
             res = self.functional_mul_zero.mul_scalar(x, 0.0)
         else:
+            print("I am in else")
             res = self.residual(x)
 
+        print("Shape after residual: ", x.shape)
         # spatial convolution of incoming frame (node-wise)
-        x = self.conv(x)
+        a = self.conv1(x)
+        b = self.conv2(x)
+        c = self.conv3(x)
 
-        # aggregate features spatially and temporally (non-traceable module for FX Graph Quantization)
-        x = self.aggregate(x)
+        #Matrix multiplication (individual), Summation, Fifo...
+        print("a.shape: ", a.shape)
+        # print("Self.A.shape: ", self.A1.shape)
+        a1 = torch.matmul(a.reshape(64,25), A1.reshape(25,25))
+        b1 = torch.matmul(b.reshape(64,25), A2.reshape(25,25))
+        c1 = torch.matmul(c.reshape((64,25)), A3.reshape(25,25))
 
-        # normalize the output of the st-gcn operation and activate
-        x = self.bn_relu(x)
-
-        # add the branches (main + residual), activate and dropout
-        x = self.functional_add.add(x, res)
-
-        return self.do(x)
-
-
-class AggregateStgcn(nn.Module):
-    """
-    Floating-point custom Module for spatial-temporal aggregation separated from other natively-traceable modules for the quantization workflow
-    """
-
-    def __init__(
-        self,
-        graph,
-        fifo_size,
-        kernel_size,
-        out_channels,
-        stride):
-
-        super(AggregateStgcn, self).__init__()
-
-        self.out_channels = out_channels
-        self.stride = stride
-        self.fifo_size = fifo_size
-        self.kernel_size = kernel_size
-        self.fifo = torch.zeros(1, fifo_size, out_channels, graph.size(1), dtype=torch.float32)
-
-        # FIFO for intermediate Gamma graph frames after multiplication with adjacency matrices
-        # (N,G,C,V) - (N)batch, (G)amma, (C)hannels, (V)ertices
-        # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
-        self.A = torch.tensor(graph, dtype=torch.float32, requires_grad=False)
+        return a1, b1, c1, res
 
 
-    def forward(self, x):
-        # TODO: optimize data manipulation and vectorize the for-loop for the buffered realtime setup
-
-        # convert to the expected dimension order and add the partition dimension
-        # reshape the tensor for multiplication with the adjacency matrix
-        # (convolution output contains all partitions, stacked across the channel dimension)
-        # split into separate 4D tensors, each corresponding to a separate partition
-        x = torch.split(x, self.out_channels, dim=1)
-        # concatenate these 4D tensors across the partition dimension
-        x = torch.stack(x, -1)
-        # change the dimension order for the correct broadcating of the adjacency matrix
-        # (N,C,L,V,P) -> (N,L,P,C,V)
-        x = x.permute(0,2,4,1,3)
-        # single multiplication with the adjacency matrices (spatial selective addition, across partitions)
-        x = torch.matmul(x, self.A)
-
-        # perform temporal accumulation for each of the buffered frames
-        # (portability for buffered_realtime setup, for realtime, the buffer is of size 1)
-        outputs = []
-        for i in range(x.shape[1]):
-            # push the frame, summed across partitions, into the FIFO
-            self.fifo = torch.cat((x.sum(dim=2)[:,i:i+1], self.fifo[:,:self.fifo_size-1]), 1)
-
-            # slice the tensor according to the temporal stride size
-            # (if stride is 1, returns the whole tensor itself)
-            a = self.fifo[:,range(0, self.fifo_size, self.stride)]
-
-            # sum temporally
-            # (C,H)
-            b = torch.sum(a, dim=(1))
-            outputs.append(b)
-
-        # stack frame-wise tensors into the original length L
-        # [(N,C,V)] -> (N,C,L,V)
-        return torch.stack(outputs, 2)
-
-
-class ObservedAggregateStgcn(nn.Module):
-    """"""
-
-    def __init__(
-        self,
-        channels,
-        num_partitions,
-        num_joints,
-        stride,
-        fifo_size,
-        kernel_size,
-        graph):
-
-        super(ObservedAggregateStgcn, self).__init__()
-
-        self.conv3d_matmul = nn.Conv3d(in_channels=num_partitions, out_channels=num_joints, kernel_size=(1,num_joints,1), bias=False)
-        self.conv3d_sum = nn.Conv3d(in_channels=1, out_channels=1, kernel_size=(1,kernel_size,1), dilation=(1,stride,1), bias=False)
-        self.functional_cat = nnq.FloatFunctional()
-
-        self.conv3d_matmul.weight = nn.Parameter(graph.permute(2,0,1)[:,:,None,:,None], requires_grad=False)
-        self.conv3d_sum.weight = nn.Parameter(torch.ones(1,1,1,kernel_size,1), requires_grad=False)
-
-        self.fifo = torch.zeros(1, 1, channels, fifo_size, num_joints, dtype=torch.float32)
-
-        self.channels = channels
-        self.fifo_size = fifo_size
-        self.kernel_size = kernel_size
-        self.num_joints = num_joints
-
-
-    @classmethod
-    def from_float(cls, float_mod):
-        assert hasattr(float_mod, 'qconfig')
-        observed_mod = cls(
-            float_mod.out_channels,
-            float_mod.A.size(0),
-            float_mod.A.size(1),
-            float_mod.stride,
-            float_mod.fifo_size,
-            float_mod.kernel_size,
-            float_mod.A)
-        observed_mod.qconfig = float_mod.qconfig
-        # observed_mod.eval()
-        return observed_mod
-
-
-    def forward(self, x):
-        x = x.unfold(dimension=1, size=self.channels, step=self.channels)
-        x = self.conv3d_matmul(x).permute(0,2,4,3,1)
-
-        # TODO: instead of -1 use the latency number of quants to make compatible with buffered RT
-        self.fifo = self.functional_cat.cat([x, self.fifo[:,:,:,:-1]], dim=3)
-
-        x = self.conv3d_sum(self.fifo)[:,0]
-
-        return x
-
-
-class QAggregateStgcn(nn.Module):
-    """"""
-
-    def __init__(
-        self,
-        conv3d_matmul,
-        conv3d_sum,
-        functional_cat,
-        fifo,
-        channels):
-
-        super(QAggregateStgcn, self).__init__()
-
-        self.conv3d_matmul = conv3d_matmul
-        self.conv3d_sum = conv3d_sum
-        self.functional_cat = functional_cat
-
-        self.fifo = fifo
-
-        self.channels = channels
-
-
-    @classmethod
-    def from_observed(cls, observed_mod):
-        assert hasattr(observed_mod, 'qconfig')
-        assert hasattr(observed_mod, 'activation_post_process')
-
-        observed_mod.conv3d_matmul.activation_post_process = observed_mod.activation_post_process
-        observed_mod.conv3d_sum.activation_post_process = observed_mod.activation_post_process
-        observed_mod.conv3d_matmul.qconfig = observed_mod.qconfig
-        observed_mod.conv3d_sum.qconfig = observed_mod.qconfig
-
-        scale, zero_point = observed_mod.activation_post_process.calculate_qparams()
-        quantized_mod = cls(
-            nnq.Conv3d.from_float(observed_mod.conv3d_matmul),
-            nnq.Conv3d.from_float(observed_mod.conv3d_sum),
-            observed_mod.functional_cat,
-            torch.quantize_per_tensor(observed_mod.fifo, scale, zero_point, dtype=torch.quint8),
-            observed_mod.channels)
-        return quantized_mod
-
-
-    def forward(self, x):
-        x = x.unfold(dimension=1, size=self.channels, step=self.channels)
-        x = self.conv3d_matmul(x).permute(0,2,4,3,1)
-
-        # TODO: instead of -1 use the latency number of quants to make compatible with buffered RT
-        self.fifo = self.functional_cat.cat([x, self.fifo[:,:,:,:-1]], dim=3)
-
-        x = self.conv3d_sum(self.fifo)[:,0]
-
-        return x

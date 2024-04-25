@@ -1,1 +1,1 @@
-from .rtstgcn import Model
+from .rtstgcn_until_matmul import Model
