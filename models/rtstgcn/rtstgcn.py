@@ -143,7 +143,7 @@ class Model(nn.Module):
 
         # remap the features to the network size
         x = self.fcn_in(x)
-
+    
         # feed the frame into the ST-GCN block backbone
         for gcn in self.st_gcn:
             x = gcn(x, self.A)

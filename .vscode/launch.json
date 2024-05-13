@@ -8,7 +8,7 @@
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
-                "train",
+                "benchmark",
                 "--config",
                 "config/pku-mmd/ln/rtstgcn_local.json",
             ]

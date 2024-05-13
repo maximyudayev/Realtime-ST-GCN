@@ -372,7 +372,7 @@ class OfflineLayer(nn.Module):
 
         x = torch.matmul(x, A*self.edge_importance)
 
-        full_shift = torch.floor(self.adaptive_shift).long()
+        full_shift = torch.floor(self.adaptive_shift)
         partial_shift = self.adaptive_shift - full_shift
 
         full_shift_expanded = full_shift.unsqueeze(0).repeat(G, 1).view(G * C)
@@ -635,19 +635,28 @@ class AggregateStgcn(nn.Module):
         a = self.fifo[:,range(0, self.fifo_size, self.stride)]
         
         _, G, C, V = a.size()
-    
-        a = torch.view(a, [G*C, V]) #Initialize the shifted tensor
-        temp_tensor = torch.zeros(G*C, G*C)
-        
-        for i in range(G * C):
-            shift = math.floor(self.adaptive_shift[i % C].item())
-            partial_shift = self.adaptive_shift[i%C].item() - shift
-            if shift*C + i >= 0 and shift*C + i < G * C:
-                temp_tensor[i, shift*C + i] = 1.0 * (1 - partial_shift)
-            if (shift + 1)*C + i >= 0 and (shift + 1)*C + i < G * C:
-                temp_tensor[i, (shift + 1)*C + i] = 1.0 * partial_shift
 
-        a = torch.matmul(temp_tensor, a).view([G, C, int(math.sqrt(V)), int(math.sqrt(V))])
+        full_shift = torch.floor(self.adaptive_shift)
+        partial_shift = self.adaptive_shift - full_shift
+
+        full_shift_expanded = full_shift.unsqueeze(0).repeat(G, 1).view(G * C)
+        partial_shift_expanded = partial_shift.unsqueeze(0).repeat(G, 1).view(G * C)
+
+        base_indices = torch.arange(G * C)
+        target_indices = base_indices + full_shift_expanded * C
+        target_indices_plus_one = base_indices + (full_shift_expanded + 1) * C
+
+        shifting_matrix = torch.zeros(G * C, G * C)
+
+        valid_mask = (target_indices >= 0) & (target_indices < G * C)
+        shifting_matrix[base_indices[valid_mask], target_indices[valid_mask]] = 1 - partial_shift_expanded[valid_mask]
+
+        valid_mask_plus_one = (target_indices_plus_one >= 0) & (target_indices_plus_one < G * C)
+        shifting_matrix[base_indices[valid_mask_plus_one], target_indices_plus_one[valid_mask_plus_one]] = partial_shift_expanded[valid_mask_plus_one]
+
+        a = a.view([G*C, V]) 
+        
+        a = torch.matmul(shifting_matrix, a).view([G, C, int(math.sqrt(V)), int(math.sqrt(V))])
         
         a = a[-1].view(1, C, V)
 

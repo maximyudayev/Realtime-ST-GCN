@@ -31,7 +31,6 @@ def _build_model(Model, rank, args):
 
     if torch.cuda.device_count() > 1 and not isinstance(model, MsGcn):
         model = DP(model)
-
     model.to(rank)
 
     # load the checkpoint if not trained from scratch
@@ -875,12 +874,12 @@ class Processor:
 
         NOTE: currently only supports `original` and `realtime` on `dir` dataset types.
         """
-
+        self.model._swap_layers_for_inference()
         start_time = time.time()
         print("Benchmarking started", flush=True, file=job_conf["log"][0])
-
+        
         # replace trainable layers of the proposed model with quantizeable inference-only version
-        arch_conf = self.model.prepare_benchmark(arch_conf)
+        #arch_conf = self.model.prepare_benchmark(arch_conf)
 
         self.model.eval()
         self.model = torch.jit.script(self.model)
