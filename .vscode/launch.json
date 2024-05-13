@@ -8,9 +8,9 @@
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
-                "benchmark",
+                "train",
                 "--config",
-                "config/pku-mmd/ln/costgcn_local.json",
+                "config/pku-mmd/ln/rtstgcn_local.json",
             ]
         },
         {

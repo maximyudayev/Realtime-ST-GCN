@@ -380,7 +380,7 @@ class Processor:
             predictions = self.model(x)
 
             # recombine results back into a time-series, corresponding to the segmentation strategy
-            predictions = self.segment_generator.mask_segment(L, P_start, P_end, predictions)
+            predictions = self.segment_generator.mask_segment(i, num_subsegments, L, P_start, P_end, predictions)
 
             # get the loss of the model
             ce, mse = self.loss(i, predictions, y)
@@ -882,7 +882,6 @@ class Processor:
         print("Benchmarking started", flush=True, file=job_conf["log"][0])
 
         # replace trainable layers of the proposed model with quantizeable inference-only version
-        # TODO: extend to other models and call using meaningful common method name
         arch_conf = self.model.prepare_benchmark(arch_conf)
 
         self.model.eval()

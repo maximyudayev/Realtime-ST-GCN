@@ -364,12 +364,12 @@ class OfflineLayer(nn.Module):
 
         # TODO: replace with unfold -> fold calls
         # Toeplitz matrix for temporal accumulation that mimics FIFO behavior, but in batch on full sequence
-        toeplitz = torch.zeros(L, L, device=device)
+        toeplitz = torch.zeros(L, L, device=device if device > 0 else "cpu")
         for i in range(self.kernel_size//self.stride):
             toeplitz += F.pad(
                 torch.eye(
                     L - self.stride * i,
-                    device=device),
+                    device=device if device > 0 else "cpu"),
                 (i*self.stride,0,0,i*self.stride))
 
         # sum temporally by multiplying features with the Toeplitz matrix
