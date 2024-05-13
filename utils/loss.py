@@ -22,6 +22,22 @@ class Loss:
         # MSE component punishes large variations intra-class predictions between consecutive time quants
         self.mse = nn.MSELoss(reduction='none')
 
+    # def __call__(self, i, predictions, ground_truth):
+    #     predictions_copy = predictions.clone()
+
+    #     ce = self.ce(self.foo(predictions_copy if i==0 else predictions_copy[:,:,1:]), ground_truth)
+
+    #     predictions_copy = self.bar(predictions_copy)
+    #     mse = 0.15 * torch.mean(
+    #         torch.clamp(
+    #             self.mse(
+    #                 predictions_copy[:,:,1:],
+    #                 predictions_copy.detach()[:,:,:-1]),
+    #             min=0,
+    #             max=16))
+
+    #     return ce, mse
+
     def __call__(self, i, predictions, ground_truth):        
         # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
         # NOTE: subsegments have an overlap of 1 in outputs to enable correct MSE calculation, CE calculation should avoid double counting that frame

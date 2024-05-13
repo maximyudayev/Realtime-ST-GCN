@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = ''
+#os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
 import torch
 
@@ -54,7 +54,6 @@ def train(rank, world_size, args):
         args : ``dict``
             Parsed CLI arguments.
     """
-
     # return reference to the user selected model constructor
     Model, Loss, SegmentGenerator, Statistics = pick_model(args)
 

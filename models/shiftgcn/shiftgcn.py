@@ -103,7 +103,7 @@ class Model(nn.Module):
 
         # fcn for feature remapping of input to the network size
         self.fcn_in = nn.Conv2d(in_channels=self.conf['in_feat'], out_channels=self.conf['in_ch'][0], kernel_size=1)
-
+        self.adaptive_shift = [(nn.Parameter(torch.rand(self.conf['out_ch'][i]) * self.conf['kernel'])) for i in range(self.conf['layers'])]
         # stack of ST-GCN layers
         stack = [
             OfflineLayer(
@@ -117,7 +117,8 @@ class Model(nn.Module):
                 dropout=self.conf['dropout'][i],
                 importance=self.conf['importance'],
                 graph=self.A,
-                normalization=kwargs['normalization'])
+                normalization=kwargs['normalization'],
+                adaptive_shift=self.adaptive_shift[i])
             for i in range(self.conf['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
@@ -175,7 +176,8 @@ class Model(nn.Module):
                 dropout=self.conf['dropout'][i],
                 importance=self.conf['importance'],
                 graph=self.A,
-                normalization=self.normalization)
+                normalization=self.normalization,
+                adaptive_shift=self.adaptive_shift[i])
             for i in range(self.conf['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
@@ -259,6 +261,7 @@ class OfflineLayer(nn.Module):
         residual,
         importance,
         graph,
+        adaptive_shift,
         normalization='LayerNorm'):
         """
         Args:
@@ -298,10 +301,8 @@ class OfflineLayer(nn.Module):
         self.num_joints = num_joints
         self.stride = stride
         self.kernel_size = kernel_size
-
         self.out_channels = out_channels
-        self.adaptive_shift = nn.Parameter(torch.rand(out_channels) * self.kernel_size)
-
+        self.adaptive_shift = adaptive_shift
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
         # self.A = graph.clone().detach()
         # self.A = graph
@@ -344,7 +345,6 @@ class OfflineLayer(nn.Module):
     def forward(self, x, A):
         _,_,L,_ = x.size()
         device = x.device
-        print(x.size())
         # residual branch
         res = self.residual(x)
 
@@ -392,16 +392,16 @@ class OfflineLayer(nn.Module):
                 
         x = x.permute(0, 2, 1, 3, 4).squeeze(dim=0) #(N,L,P,C,V) -> (N,P,L,C,V) -> (P, L, C, V)
 
-        pad = torch.zeros((P, G - 1, C, V), device=device)
+        pad = torch.zeros((P, G - 1, C, V), device=device )
         x = torch.cat((x, pad), dim=1)
 
         x = x.unfold(dimension=1, size=G, step=1) 
-        x = x.permute(0, 1, 4, 2, 3).reshape(P, L, G * C, V) #(P,L,C,V,G) -> (P,L,G,C,V) -> (P, L, G*C, V)
+        x = x.permute(0, 1, 4, 2, 3).view(P, L, G * C, V) #(P,L,C,V,G) -> (P,L,G,C,V) -> (P, L, G*C, V)
 
-        shifted = torch.matmul(shifting_matrix, x)
-        shifted = shifted.reshape(P, L, G, C, V).reshape(P * L, G*C, int(math.sqrt(V)), int(math.sqrt(V))) # (P, L, G*C, V) -> (P, L, G, C, V) -> (P*L, G*C, sqrt(V), sqrt(V))
-        out = self.pointwise_conv(shifted[:, -(C):])
-        x = out.reshape([P, L, C, V]).unsqueeze(dim=0)
+        x = torch.matmul(shifting_matrix, x)
+        x = x.view(P, L, G, C, V).view(P * L, G*C, int(math.sqrt(V)), int(math.sqrt(V))) # (P, L, G*C, V) -> (P, L, G, C, V) -> (P*L, G*C, sqrt(V), sqrt(V))
+        x = self.pointwise_conv(x[:, -(C):])
+        x = x.view([P, L, C, V]).unsqueeze(dim=0)
 
         # sum across partitions (N,L,C,V)
         x = torch.sum(x, dim=(1))
@@ -458,6 +458,7 @@ class OnlineLayer(nn.Module):
         residual,
         importance,
         graph,
+        adaptive_shift,
         normalization='LayerNorm'):
         """
         Args:
@@ -513,10 +514,10 @@ class OnlineLayer(nn.Module):
         # to avoid for-looping over several partitions)
         # partition-wise convolution results are basically stacked across channel-dimension
         self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1)
-
+        self.pointwise_conv = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=(1, 1))
         # non-traceable natively spatial and temporal aggregation of remapped node features
         # split into a separate module for the quantizaiton workflow
-        self.aggregate = AggregateStgcn(graph, fifo_size, kernel_size, out_channels, stride)
+        self.aggregate = AggregateStgcn(graph, fifo_size, kernel_size, out_channels, stride, adaptive_shift)
 
         # normalization and dropout on main branch
         self.bn_relu = nn.Sequential(
@@ -569,7 +570,8 @@ class OnlineLayer(nn.Module):
 
         # aggregate features spatially and temporally (non-traceable module for FX Graph Quantization)
         x = self.aggregate(x)
-
+        
+        x = self.pointwise_conv(x)
         # normalize the output of the st-gcn operation and activate
         x = self.bn_relu(x)
 
@@ -590,7 +592,8 @@ class AggregateStgcn(nn.Module):
         fifo_size,
         kernel_size,
         out_channels,
-        stride):
+        stride,
+        adaptive_shift):
 
         super(AggregateStgcn, self).__init__()
 
@@ -599,7 +602,7 @@ class AggregateStgcn(nn.Module):
         self.fifo_size = fifo_size
         self.kernel_size = kernel_size
         self.fifo = torch.zeros(1, fifo_size, out_channels, graph.size(1), dtype=torch.float32)
-        self.adaptive_shift = nn.Parameter(torch.rand(out_channels)*(fifo_size))
+        self.adaptive_shift = adaptive_shift
         
         # FIFO for intermediate Gamma graph frames after multiplication with adjacency matrices
         # (N,G,C,V) - (N)batch, (G)amma, (C)hannels, (V)ertices
@@ -631,11 +634,9 @@ class AggregateStgcn(nn.Module):
         # (if stride is 1, returns the whole tensor itself)
         a = self.fifo[:,range(0, self.fifo_size, self.stride)]
         
-        N, G, C, V = a.size()
-
-        # num_of_partitions = 2 * self.adaptive_shift + 1 #Number of partitions
-        # partition_size = int(a.shape[2] / num_of_partitions) #Size of each partition
-        shifted_tensor = torch.reshape(a, [G*C, V]) #Initialize the shifted tensor
+        _, G, C, V = a.size()
+    
+        a = torch.view(a, [G*C, V]) #Initialize the shifted tensor
         temp_tensor = torch.zeros(G*C, G*C)
         
         for i in range(G * C):
@@ -646,15 +647,11 @@ class AggregateStgcn(nn.Module):
             if (shift + 1)*C + i >= 0 and (shift + 1)*C + i < G * C:
                 temp_tensor[i, (shift + 1)*C + i] = 1.0 * partial_shift
 
-        shifted_tensor = torch.matmul(temp_tensor, shifted_tensor).reshape([G, C, int(math.sqrt(V)), int(math.sqrt(V))]) # [9, 64, 5, 5]
+        a = torch.matmul(temp_tensor, a).view([G, C, int(math.sqrt(V)), int(math.sqrt(V))])
         
-        pointwise_conv = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(1, 1))
+        a = a[-1].view(1, C, V)
 
-        output_tensor_reshaped = pointwise_conv(shifted_tensor[-1]).reshape(1, C, V)
-
-        # stack frame-wise tensors into the original length L
-        # [(N,C,V)] -> (N,C,L,V)
-        return output_tensor_reshaped
+        return a
 
 
 class ObservedAggregateStgcn(nn.Module):

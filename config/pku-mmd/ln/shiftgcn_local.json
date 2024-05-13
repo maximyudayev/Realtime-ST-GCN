@@ -16,6 +16,7 @@
         "in_feat": 3,
         "stages": 1,
         "kernel": 9,
+        "segment": 300,
         "output_type": "logits",
         "normalization": "LayerNorm",
         "shift-gcn": {
@@ -35,7 +36,7 @@
     },
     "optimizer": {
         "seed": 1538574472,
-        "epochs": 50,
+        "epochs": 1,
         "checkpoint_indices": [
             0,1,2,3,4,5,6,7,8,9,
             10,11,12,13,14,15,16,17,18,19,
@@ -52,7 +53,7 @@
         "batch_size": 64
     },
     "job": {
-        "email": "maxim.yudayev@kuleuven.be",
+        "email": "nur.aldaonggar@student.kuleuven.be",
         "log": [null,null],
         "verbose": 0
     }
