@@ -103,7 +103,6 @@ class Model(nn.Module):
 
         # fcn for feature remapping of input to the network size
         self.fcn_in = nn.Conv2d(in_channels=self.conf['in_feat'], out_channels=self.conf['in_ch'][0], kernel_size=1)
-        self.adaptive_shift = [(nn.Parameter(torch.rand(self.conf['out_ch'][i]) * self.conf['kernel'])) for i in range(self.conf['layers'])]
         # stack of ST-GCN layers
         stack = [
             OfflineLayer(
@@ -117,8 +116,7 @@ class Model(nn.Module):
                 dropout=self.conf['dropout'][i],
                 importance=self.conf['importance'],
                 graph=self.A,
-                normalization=kwargs['normalization'],
-                adaptive_shift=self.adaptive_shift[i])
+                normalization=kwargs['normalization'])
             for i in range(self.conf['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
@@ -176,8 +174,7 @@ class Model(nn.Module):
                 dropout=self.conf['dropout'][i],
                 importance=self.conf['importance'],
                 graph=self.A,
-                normalization=self.normalization,
-                adaptive_shift=self.adaptive_shift[i])
+                normalization=self.normalization)
             for i in range(self.conf['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
@@ -187,6 +184,7 @@ class Model(nn.Module):
         # user must ensure that all necessary updates are made on conversion between the two different architectures
         new_st_gcn.load_state_dict(self.st_gcn.state_dict(), strict=False)
 
+        self.copy_shifting_matrix(self.st_gcn, new_st_gcn)
         # replace the st gcn stack in the model
         self.st_gcn = new_st_gcn
 
@@ -216,6 +214,11 @@ class Model(nn.Module):
                 }
             }
         }
+    
+    def copy_shifting_matrix(self, source_layers, target_layers):
+        for source_layer, target_layer in zip(source_layers, target_layers):
+            if hasattr(source_layer, 'shifting_matrix') and hasattr(target_layer, 'shifting_matrix'):
+                target_layer.shifting_matrix = source_layer.shifting_matrix
 
 
 class OfflineLayer(nn.Module):
@@ -261,7 +264,6 @@ class OfflineLayer(nn.Module):
         residual,
         importance,
         graph,
-        adaptive_shift,
         normalization='LayerNorm'):
         """
         Args:
@@ -302,7 +304,6 @@ class OfflineLayer(nn.Module):
         self.stride = stride
         self.kernel_size = kernel_size
         self.out_channels = out_channels
-        self.adaptive_shift = adaptive_shift
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
         # self.A = graph.clone().detach()
         # self.A = graph
@@ -341,6 +342,27 @@ class OfflineLayer(nn.Module):
                 nn.ReLU(),
                 nn.Dropout(dropout))
 
+        self.adaptive_shift = (nn.Parameter(torch.rand(out_channels) * kernel_size))
+
+        G, C = self.kernel_size, self.out_channels    
+        full_shift = torch.floor(self.adaptive_shift).long()
+        partial_shift = self.adaptive_shift - full_shift
+
+        full_shift_expanded = full_shift.unsqueeze(0).repeat(G, 1).view(G * C)
+        partial_shift_expanded = partial_shift.unsqueeze(0).repeat(G, 1).view(G * C)
+
+        base_indices = torch.arange(G * C)
+        target_indices = base_indices + full_shift_expanded * C
+        target_indices_plus_one = base_indices + (full_shift_expanded + 1) * C
+
+        self.shifting_matrix = torch.zeros(G * C, G * C)
+
+        valid_mask = (target_indices >= 0) & (target_indices < G * C)
+        self.shifting_matrix[base_indices[valid_mask], target_indices[valid_mask]] = 1 - partial_shift_expanded[valid_mask]
+
+        valid_mask_plus_one = (target_indices_plus_one >= 0) & (target_indices_plus_one < G * C)
+        self.shifting_matrix[base_indices[valid_mask_plus_one], target_indices_plus_one[valid_mask_plus_one]] = partial_shift_expanded[valid_mask_plus_one]
+
 
     def forward(self, x, A):
         _,_,L,_ = x.size()
@@ -371,34 +393,17 @@ class OfflineLayer(nn.Module):
         G = self.kernel_size
 
         x = torch.matmul(x, A*self.edge_importance)
-
-        full_shift = torch.floor(self.adaptive_shift)
-        partial_shift = self.adaptive_shift - full_shift
-
-        full_shift_expanded = full_shift.unsqueeze(0).repeat(G, 1).view(G * C)
-        partial_shift_expanded = partial_shift.unsqueeze(0).repeat(G, 1).view(G * C)
-
-        base_indices = torch.arange(G * C, device=device)
-        target_indices = base_indices + full_shift_expanded * C
-        target_indices_plus_one = base_indices + (full_shift_expanded + 1) * C
-
-        shifting_matrix = torch.zeros(G * C, G * C, device=device)
-
-        valid_mask = (target_indices >= 0) & (target_indices < G * C)
-        shifting_matrix[base_indices[valid_mask], target_indices[valid_mask]] = 1 - partial_shift_expanded[valid_mask]
-
-        valid_mask_plus_one = (target_indices_plus_one >= 0) & (target_indices_plus_one < G * C)
-        shifting_matrix[base_indices[valid_mask_plus_one], target_indices_plus_one[valid_mask_plus_one]] = partial_shift_expanded[valid_mask_plus_one]
                 
         x = x.permute(0, 2, 1, 3, 4).squeeze(dim=0) #(N,L,P,C,V) -> (N,P,L,C,V) -> (P, L, C, V)
 
         pad = torch.zeros((P, G - 1, C, V), device=device )
+
         x = torch.cat((x, pad), dim=1)
 
         x = x.unfold(dimension=1, size=G, step=1) 
         x = x.permute(0, 1, 4, 2, 3).view(P, L, G * C, V) #(P,L,C,V,G) -> (P,L,G,C,V) -> (P, L, G*C, V)
 
-        x = torch.matmul(shifting_matrix, x)
+        x = torch.matmul(self.shifting_matrix, x)
         x = x.view(P, L, G, C, V).view(P * L, G*C, int(math.sqrt(V)), int(math.sqrt(V))) # (P, L, G*C, V) -> (P, L, G, C, V) -> (P*L, G*C, sqrt(V), sqrt(V))
         x = self.pointwise_conv(x[:, -(C):])
         x = x.view([P, L, C, V]).unsqueeze(dim=0)
@@ -458,7 +463,6 @@ class OnlineLayer(nn.Module):
         residual,
         importance,
         graph,
-        adaptive_shift,
         normalization='LayerNorm'):
         """
         Args:
@@ -514,10 +518,30 @@ class OnlineLayer(nn.Module):
         # to avoid for-looping over several partitions)
         # partition-wise convolution results are basically stacked across channel-dimension
         self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1)
-        self.pointwise_conv = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=(1, 1))
+        self.shifting_matrix = torch.zeros(fifo_size*out_channels, fifo_size*out_channels)
+        # G, C = fifo_size, out_channels
+
+        # full_shift = torch.floor(adaptive_shift)
+        # partial_shift = adaptive_shift - full_shift
+        
+        # full_shift_expanded = full_shift.unsqueeze(0).repeat(G, 1).view(G * C)
+        # partial_shift_expanded = partial_shift.unsqueeze(0).repeat(G, 1).view(G * C)
+
+        # base_indices = torch.arange(G * C).long()
+        # target_indices = (base_indices + full_shift_expanded * C).long()
+        # target_indices_plus_one = (base_indices + (full_shift_expanded + 1) * C).long()
+
+        # self.shifting_matrix = torch.zeros(G * C, G * C)
+
+        # valid_mask = (target_indices >= 0) & (target_indices < G * C)
+        # self.shifting_matrix[base_indices[valid_mask], target_indices[valid_mask]] = 1 - partial_shift_expanded[valid_mask]
+
+        # valid_mask_plus_one = (target_indices_plus_one >= 0) & (target_indices_plus_one < G * C)
+        # self.shifting_matrix[base_indices[valid_mask_plus_one], target_indices_plus_one[valid_mask_plus_one]] = partial_shift_expanded[valid_mask_plus_one]
+
         # non-traceable natively spatial and temporal aggregation of remapped node features
         # split into a separate module for the quantizaiton workflow
-        self.aggregate = AggregateStgcn(graph, fifo_size, kernel_size, out_channels, stride, adaptive_shift)
+        self.aggregate = AggregateStgcn(graph, fifo_size, kernel_size, out_channels, stride, self.shifting_matrix)
 
         # normalization and dropout on main branch
         self.bn_relu = nn.Sequential(
@@ -538,6 +562,7 @@ class OnlineLayer(nn.Module):
 
         # activation of branch sum
         # if no resnet connection, prevent ReLU from being applied twice
+        dropout = float(dropout)
         if not residual:
             self.do = nn.Dropout(dropout)
         else:
@@ -552,7 +577,7 @@ class OnlineLayer(nn.Module):
         return
 
 
-    def forward(self, x):
+    def forward(self, x, A):
         """
         In case of buffered realtime processing, Conv2D and MMUL are done on the buffered frames,
         which mimics the kernels reuse mechanism that would be followed in hardware at the expense
@@ -571,7 +596,6 @@ class OnlineLayer(nn.Module):
         # aggregate features spatially and temporally (non-traceable module for FX Graph Quantization)
         x = self.aggregate(x)
         
-        x = self.pointwise_conv(x)
         # normalize the output of the st-gcn operation and activate
         x = self.bn_relu(x)
 
@@ -593,7 +617,7 @@ class AggregateStgcn(nn.Module):
         kernel_size,
         out_channels,
         stride,
-        adaptive_shift):
+        shifting_matrix):
 
         super(AggregateStgcn, self).__init__()
 
@@ -602,8 +626,10 @@ class AggregateStgcn(nn.Module):
         self.fifo_size = fifo_size
         self.kernel_size = kernel_size
         self.fifo = torch.zeros(1, fifo_size, out_channels, graph.size(1), dtype=torch.float32)
-        self.adaptive_shift = adaptive_shift
         
+        self.pointwise_conv = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=(1, 1))
+
+        self.shifting_matrix = shifting_matrix
         # FIFO for intermediate Gamma graph frames after multiplication with adjacency matrices
         # (N,G,C,V) - (N)batch, (G)amma, (C)hannels, (V)ertices
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
@@ -627,40 +653,22 @@ class AggregateStgcn(nn.Module):
         # single multiplication with the adjacency matrices (spatial selective addition, across partitions)
         x = torch.matmul(x, self.A)
 
+        G, C, V = self.fifo_size, x.shape[3], x.shape[4]
+
         # push the frame, summed across partitions, into the FIFO
         self.fifo = torch.cat((x.sum(dim=2), self.fifo[:,:self.fifo_size-1]), 1)
 
         # slice the tensor according to the temporal stride size
         # (if stride is 1, returns the whole tensor itself)
-        a = self.fifo[:,range(0, self.fifo_size, self.stride)]
+        a = self.fifo[:,torch.arange(0, self.fifo_size, self.stride)]
         
-        _, G, C, V = a.size()
-
-        full_shift = torch.floor(self.adaptive_shift)
-        partial_shift = self.adaptive_shift - full_shift
-
-        full_shift_expanded = full_shift.unsqueeze(0).repeat(G, 1).view(G * C)
-        partial_shift_expanded = partial_shift.unsqueeze(0).repeat(G, 1).view(G * C)
-
-        base_indices = torch.arange(G * C)
-        target_indices = base_indices + full_shift_expanded * C
-        target_indices_plus_one = base_indices + (full_shift_expanded + 1) * C
-
-        shifting_matrix = torch.zeros(G * C, G * C)
-
-        valid_mask = (target_indices >= 0) & (target_indices < G * C)
-        shifting_matrix[base_indices[valid_mask], target_indices[valid_mask]] = 1 - partial_shift_expanded[valid_mask]
-
-        valid_mask_plus_one = (target_indices_plus_one >= 0) & (target_indices_plus_one < G * C)
-        shifting_matrix[base_indices[valid_mask_plus_one], target_indices_plus_one[valid_mask_plus_one]] = partial_shift_expanded[valid_mask_plus_one]
-
         a = a.view([G*C, V]) 
         
-        a = torch.matmul(shifting_matrix, a).view([G, C, int(math.sqrt(V)), int(math.sqrt(V))])
-        
-        a = a[-1].view(1, C, V)
+        a = torch.matmul(self.shifting_matrix, a).view([G, C, int(math.sqrt(V)), int(math.sqrt(V))])
+        a = self.pointwise_conv(a[-1]).view([1, C, 1, V])
 
         return a
+    
 
 
 class ObservedAggregateStgcn(nn.Module):

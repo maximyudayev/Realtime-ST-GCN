@@ -571,7 +571,7 @@ class Processor:
         optim_conf,
         job_conf):
         """Trains the model, given user-defined training parameters."""
-
+        # self.model._swap_layers_for_inference()
         # setup the optimizer
         self.optimizer = optim.Adam(self.model.parameters(), lr=optim_conf['learning_rate'])
 
@@ -900,7 +900,7 @@ class Processor:
 
         # prepare the FP32 model: attaches observers to all layers, including the custom layer
         qconfig = torch.ao.quantization.get_default_qconfig_mapping(proc_conf['backend'])
-        self.model = prepare_fx(self.model, qconfig_mapping=qconfig, example_inputs=torch.randn(1,3,1,25), prepare_custom_config=arch_conf['prepare_dict'])
+        # self.model = prepare_fx(self.model, qconfig_mapping=qconfig, example_inputs=torch.randn(1,3,1,25), prepare_custom_config=arch_conf['prepare_dict'])
 
         # calibrate the observed model (must be done on the same device as training)
         top1_acc_cal, top5_acc_cal, ce_epoch_loss_cal, mse_epoch_loss_cal, _ = self._test(

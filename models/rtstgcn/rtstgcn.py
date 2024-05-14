@@ -509,6 +509,7 @@ class OnlineLayer(nn.Module):
 
         # activation of branch sum
         # if no resnet connection, prevent ReLU from being applied twice
+        dropout = float(dropout)
         if not residual:
             self.do = nn.Dropout(dropout)
         else:
@@ -523,7 +524,7 @@ class OnlineLayer(nn.Module):
         return
 
 
-    def forward(self, x):
+    def forward(self, x, A):
         """
         In case of buffered realtime processing, Conv2D and MMUL are done on the buffered frames,
         which mimics the kernels reuse mechanism that would be followed in hardware at the expense
@@ -535,7 +536,7 @@ class OnlineLayer(nn.Module):
             res = self.functional_mul_zero.mul_scalar(x, 0.0)
         else:
             res = self.residual(x)
-
+    
         # spatial convolution of incoming frame (node-wise)
         x = self.conv(x)
 
@@ -597,23 +598,21 @@ class AggregateStgcn(nn.Module):
 
         # perform temporal accumulation for each of the buffered frames
         # (portability for buffered_realtime setup, for realtime, the buffer is of size 1)
-        outputs = []
-        for i in range(x.shape[1]):
-            # push the frame, summed across partitions, into the FIFO
-            self.fifo = torch.cat((x.sum(dim=2)[:,i:i+1], self.fifo[:,:self.fifo_size-1]), 1)
 
-            # slice the tensor according to the temporal stride size
-            # (if stride is 1, returns the whole tensor itself)
-            a = self.fifo[:,range(0, self.fifo_size, self.stride)]
+        # push the frame, summed across partitions, into the FIFO
+        self.fifo = torch.cat((x.sum(dim=2), self.fifo[:,:self.fifo_size-1]), 1)
 
-            # sum temporally
-            # (C,H)
-            b = torch.sum(a, dim=(1))
-            outputs.append(b)
+        # slice the tensor according to the temporal stride size
+        # (if stride is 1, returns the whole tensor itself)
+        a = self.fifo[:,torch.arange(0, self.fifo_size, self.stride)]
+
+        # sum temporally
+        # (C,H)
+        b = torch.sum(a, dim=(1)).view(a.shape[0], a.shape[2], 1, a.shape[3])
 
         # stack frame-wise tensors into the original length L
         # [(N,C,V)] -> (N,C,L,V)
-        return torch.stack(outputs, 2)
+        return b
 
 
 class ObservedAggregateStgcn(nn.Module):

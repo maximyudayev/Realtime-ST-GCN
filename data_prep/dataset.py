@@ -121,5 +121,5 @@ class SkeletonDatasetFromDirectory(Dataset):
             class_dist += torch.sum(
                 (labels[:,None].to(dtype=torch.float32, device=rank) == classes.expand(labels.shape[0],-1)).to(dtype=torch.float32, device=rank),
                 dim=(0))
-
+    
         return class_dist
