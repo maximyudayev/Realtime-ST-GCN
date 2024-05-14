@@ -32,3 +32,5 @@ pretrained_models/imu_fogit_ABCD/*
 # named files anywhere
 mail_draft*.txt
 temp.py
+
+*.pt
