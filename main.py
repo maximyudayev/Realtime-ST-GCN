@@ -236,8 +236,8 @@ def main(args):
     assert_parameters(args)
 
     # setting up random number generator for deterministic and meaningful benchmarking
-    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    device = torch.device("cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
     world_size = torch.cuda.device_count()
     random.seed(args.optimizer['seed'])
     torch.manual_seed(args.optimizer['seed'])

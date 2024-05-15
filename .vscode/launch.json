@@ -8,7 +8,7 @@
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
-                "benchmark",
+                "train",
                 "--config",
                 "config/pku-mmd/ln/shiftgcn_local.json",
             ]

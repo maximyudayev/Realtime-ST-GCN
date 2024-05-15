@@ -100,7 +100,7 @@ class Model(nn.Module):
         # (N,C,L,V)
         self.normalization = kwargs['normalization']
         self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
-
+        self.adaptive_shift = [(nn.Parameter(torch.rand(self.conf['out_ch'][i]))) for i in range(self.conf['layers'])]
         # fcn for feature remapping of input to the network size
         self.fcn_in = nn.Conv2d(in_channels=self.conf['in_feat'], out_channels=self.conf['in_ch'][0], kernel_size=1)
         # stack of ST-GCN layers
@@ -116,7 +116,8 @@ class Model(nn.Module):
                 dropout=self.conf['dropout'][i],
                 importance=self.conf['importance'],
                 graph=self.A,
-                normalization=kwargs['normalization'])
+                normalization=kwargs['normalization'],
+                adaptive_shift=self.adaptive_shift[i])
             for i in range(self.conf['layers'])]
         # flatten into a single sequence of layers after parameters were used to construct
         # (done like that to make config files more readable)
@@ -264,6 +265,7 @@ class OfflineLayer(nn.Module):
         residual,
         importance,
         graph,
+        adaptive_shift,
         normalization='LayerNorm'):
         """
         Args:
@@ -342,27 +344,27 @@ class OfflineLayer(nn.Module):
                 nn.ReLU(),
                 nn.Dropout(dropout))
 
-        self.adaptive_shift = (nn.Parameter(torch.rand(out_channels) * kernel_size))
+        self.adaptive_shift = adaptive_shift
 
-        G, C = self.kernel_size, self.out_channels    
-        full_shift = torch.floor(self.adaptive_shift).long()
-        partial_shift = self.adaptive_shift - full_shift
+        # G, C = self.kernel_size, self.out_channels    
+        # full_shift = torch.floor(self.adaptive_shift).long()
+        # partial_shift = self.adaptive_shift - full_shift
 
-        full_shift_expanded = full_shift.unsqueeze(0).repeat(G, 1).view(G * C)
-        partial_shift_expanded = partial_shift.unsqueeze(0).repeat(G, 1).view(G * C)
+        # full_shift_expanded = full_shift.unsqueeze(0).repeat(G, 1).view(G * C)
+        # partial_shift_expanded = partial_shift.unsqueeze(0).repeat(G, 1).view(G * C)
 
-        base_indices = torch.arange(G * C)
-        target_indices = base_indices + full_shift_expanded * C
-        target_indices_plus_one = base_indices + (full_shift_expanded + 1) * C
+        # base_indices = torch.arange(G * C)
+        # target_indices = base_indices + full_shift_expanded * C
+        # target_indices_plus_one = base_indices + (full_shift_expanded + 1) * C
 
-        self.shifting_matrix = torch.zeros(G * C, G * C)
+        # self.shifting_matrix = torch.zeros(G * C, G * C)
 
-        valid_mask = (target_indices >= 0) & (target_indices < G * C)
-        self.shifting_matrix[base_indices[valid_mask], target_indices[valid_mask]] = 1 - partial_shift_expanded[valid_mask]
+        # valid_mask = (target_indices >= 0) & (target_indices < G * C)
+        # self.shifting_matrix[base_indices[valid_mask], target_indices[valid_mask]] = 1 - partial_shift_expanded[valid_mask]
 
-        valid_mask_plus_one = (target_indices_plus_one >= 0) & (target_indices_plus_one < G * C)
-        self.shifting_matrix[base_indices[valid_mask_plus_one], target_indices_plus_one[valid_mask_plus_one]] = partial_shift_expanded[valid_mask_plus_one]
-
+        # valid_mask_plus_one = (target_indices_plus_one >= 0) & (target_indices_plus_one < G * C)
+        # self.shifting_matrix[base_indices[valid_mask_plus_one], target_indices_plus_one[valid_mask_plus_one]] = partial_shift_expanded[valid_mask_plus_one]
+        
 
     def forward(self, x, A):
         _,_,L,_ = x.size()
@@ -392,6 +394,24 @@ class OfflineLayer(nn.Module):
         V = x.size()[4]
         G = self.kernel_size
 
+        full_shift = torch.floor(self.adaptive_shift).long()
+        partial_shift = self.adaptive_shift - full_shift
+        # print(self.adaptive_shift)
+        full_shift_expanded = full_shift.unsqueeze(0).repeat(G, 1).view(G * C)
+        partial_shift_expanded = partial_shift.unsqueeze(0).repeat(G, 1).view(G * C)
+
+        base_indices = torch.arange(G * C, device=device)
+        target_indices = base_indices + full_shift_expanded * C
+        target_indices_plus_one = base_indices + (full_shift_expanded + 1) * C
+
+        self.shifting_matrix = torch.zeros(G * C, G * C, device=device)
+
+        valid_mask = (target_indices >= 0) & (target_indices < G * C)
+        self.shifting_matrix[base_indices[valid_mask], target_indices[valid_mask]] = 1 - partial_shift_expanded[valid_mask]
+
+        valid_mask_plus_one = (target_indices_plus_one >= 0) & (target_indices_plus_one < G * C)
+        self.shifting_matrix[base_indices[valid_mask_plus_one], target_indices_plus_one[valid_mask_plus_one]] = partial_shift_expanded[valid_mask_plus_one]
+
         x = torch.matmul(x, A*self.edge_importance)
                 
         x = x.permute(0, 2, 1, 3, 4).squeeze(dim=0) #(N,L,P,C,V) -> (N,P,L,C,V) -> (P, L, C, V)
@@ -402,7 +422,7 @@ class OfflineLayer(nn.Module):
 
         x = x.unfold(dimension=1, size=G, step=1) 
         x = x.permute(0, 1, 4, 2, 3).view(P, L, G * C, V) #(P,L,C,V,G) -> (P,L,G,C,V) -> (P, L, G*C, V)
-
+        # self.shifting_matrix = self.shifting_matrix.to("cuda")
         x = torch.matmul(self.shifting_matrix, x)
         x = x.view(P, L, G, C, V).view(P * L, G*C, int(math.sqrt(V)), int(math.sqrt(V))) # (P, L, G*C, V) -> (P, L, G, C, V) -> (P*L, G*C, sqrt(V), sqrt(V))
         x = self.pointwise_conv(x[:, -(C):])
