@@ -24,6 +24,7 @@
     "in_feat": 3,
     "stages": 1,
     "kernel": 9,
+    "segment": -1,
     "output_type": "logits",
     "normalization": "LayerNorm",
     "shift-gcn": {

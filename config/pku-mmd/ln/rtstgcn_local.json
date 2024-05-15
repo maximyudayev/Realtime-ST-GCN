@@ -26,6 +26,7 @@
     "kernel": 9,
     "output_type": "logits",
     "normalization": "LayerNorm",
+    "segment": -1,
     "rt-st-gcn": {
       "latency": false,
       "importance": true,
@@ -93,7 +94,7 @@
   },
   "optimizer": {
     "seed": 1538574472,
-    "epochs": 5,
+    "epochs": 50,
     "checkpoint_indices": [
       0,
       1,

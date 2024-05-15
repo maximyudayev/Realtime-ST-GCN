@@ -218,8 +218,8 @@ class Model(nn.Module):
     
     def copy_shifting_matrix(self, source_layers, target_layers):
         for source_layer, target_layer in zip(source_layers, target_layers):
-            if hasattr(source_layer, 'shifting_matrix') and hasattr(target_layer, 'shifting_matrix'):
-                target_layer.shifting_matrix = source_layer.shifting_matrix
+            if hasattr(source_layer, 'adaptive_shift') and hasattr(target_layer, 'adaptive_shift'):
+                target_layer.adaptive_shift = source_layer.adaptive_shift
 
 
 class OfflineLayer(nn.Module):
@@ -519,10 +519,10 @@ class OnlineLayer(nn.Module):
         # partition-wise convolution results are basically stacked across channel-dimension
         self.conv = nn.Conv2d(in_channels, out_channels*num_partitions, kernel_size=1)
         self.shifting_matrix = torch.zeros(fifo_size*out_channels, fifo_size*out_channels)
-
+        self.adaptive_shift = nn.Parameter(torch.zeros(out_channels))
         # non-traceable natively spatial and temporal aggregation of remapped node features
         # split into a separate module for the quantizaiton workflow
-        self.aggregate = AggregateStgcn(graph, fifo_size, kernel_size, out_channels, stride, self.shifting_matrix)
+        self.aggregate = AggregateStgcn(graph, fifo_size, kernel_size, out_channels, stride, self.adaptive_shift)
 
         # normalization and dropout on main branch
         self.bn_relu = nn.Sequential(
@@ -598,7 +598,7 @@ class AggregateStgcn(nn.Module):
         kernel_size,
         out_channels,
         stride,
-        shifting_matrix):
+        adaptive_shift):
 
         super(AggregateStgcn, self).__init__()
 
@@ -610,7 +610,7 @@ class AggregateStgcn(nn.Module):
         
         self.pointwise_conv = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=(1, 1))
 
-        self.shifting_matrix = shifting_matrix
+        self.adaptive_shift = adaptive_shift
         # FIFO for intermediate Gamma graph frames after multiplication with adjacency matrices
         # (N,G,C,V) - (N)batch, (G)amma, (C)hannels, (V)ertices
         # each layer has copy of the adjacency matrix to comply with single-input forward signature of layers for the quantization flow
@@ -634,18 +634,45 @@ class AggregateStgcn(nn.Module):
         # single multiplication with the adjacency matrices (spatial selective addition, across partitions)
         x = torch.matmul(x, self.A)
 
-        G, C, V = self.fifo_size, x.shape[3], x.shape[4]
-
         # push the frame, summed across partitions, into the FIFO
         self.fifo = torch.cat((x.sum(dim=2), self.fifo[:,:self.fifo_size-1]), 1)
 
         # slice the tensor according to the temporal stride size
         # (if stride is 1, returns the whole tensor itself)
         a = self.fifo[:,torch.arange(0, self.fifo_size, self.stride)]
-        
+        G, C, V = a.shape[1], a.shape[2], a.shape[3]
         a = a.view([G*C, V]) 
+
+        # shifted_a = a 
+        # temp_tensor = torch.zeros(G*C, V)
+
+        # shift = torch.floor(self.adaptive_shift)
+        # partial_shift = self.adaptive_shift - shift        
+        # for i in range(G * C):
+        #     cur_shift = int(shift[i % C].item())
+        #     cur_partial_shift = partial_shift[i % C].item()
+        #     if cur_shift*C + i >= 0 and cur_shift*C + i < G * C:
+        #         temp_tensor[cur_shift*C + i, :] = torch.roll(shifted_a * (1 - cur_partial_shift), cur_shift*C, 0)[cur_shift*C + i, :]
+        #     if (cur_shift + 1)*C + i >= 0 and (cur_shift + 1)*C + i < G * C:
+        #         temp_tensor[(cur_shift + 1)*C + i, :] = torch.roll(shifted_a * cur_partial_shift, (cur_shift + 1)*C, 0)[(cur_shift + 1)*C + i, :]
+
+        # shifted_a = torch.matmul(temp_tensor, shifted_a).reshape([N, G, C, V])
+
+
+        shift = torch.floor(self.adaptive_shift).long().repeat(G)
+        partial_shift = self.adaptive_shift.repeat(G) - shift
+        shifted_indices = (torch.arange(G*C) + shift * C).clamp(0, G*C-1)
+
+        next_indices = (torch.arange(G*C) + (shift + 1) * C).clamp(0, G*C-1)
+
+        weights = torch.cat([(1 - partial_shift).view(-1, 1), partial_shift.view(-1, 1)], dim=1)
+
+        # Apply the roll and select operation directly
+        temp_tensor = torch.zeros(G*C, V)
+        temp_tensor.scatter_add_(0, shifted_indices.unsqueeze(1).expand(-1, V), a * weights[:, [0]].expand(-1, V))
+        temp_tensor.scatter_add_(0, next_indices.unsqueeze(1).expand(-1, V), a * weights[:, [1]].expand(-1, V))
         
-        a = torch.matmul(self.shifting_matrix, a).view([G, C, int(math.sqrt(V)), int(math.sqrt(V))])
+        a = temp_tensor.view([G, C, int(math.sqrt(V)), int(math.sqrt(V))])
         a = self.pointwise_conv(a[-1]).view([1, C, 1, V])
 
         return a
