@@ -1,6 +1,8 @@
 import torch
 import torch.nn.functional as F
+import torch.version
 
+print(torch.__version__)
 # A = torch.eye(8)
 # shifts  = [i for i in range(-int(A.shape[0] / 2), int(A.shape[0] / 2) + 1) if i != 0]
 # shift = torch.nn.parameter.Parameter(torch.ones(64))
