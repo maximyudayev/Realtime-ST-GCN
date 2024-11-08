@@ -4,7 +4,6 @@ import torch.nn.functional as F
 
 class Segment:
     def __init__(self, rank, world_size, **kwargs):
-        # number of stages
         self.num_stages = kwargs['stages']
         self.num_classes = kwargs['num_classes']
         self.V = kwargs['graph']['num_node']
@@ -17,35 +16,39 @@ class Segment:
 
 
 class BufferSegment(Segment):
-    # For RT models, "segment" parameter controls subsegment size to fit in the available GPU
-    # -1: no sub-segmenting, splits evenly across GPUs
-    # X: splits trial into subsegments of this length (intended for single GPU experiments with insufficient memory)
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # temporal kernel size
         self.G = kwargs['kernel']
-        self.subsegment_size = kwargs['segment']
+        # if `None` don't segment and split evenly across GPUs, otherwise split evenly in segments of this size
+        self.subsegment_size = kwargs.get('segment')
 
     def pad_sequence(self, L):
+        # NOTE: subsegments only need to overlap by G-1 to mimic prefilled FIFOs to reconstruct the same state as if processed unsegmented
+        
         # no start padding needed for our RT model because elements are summed internally with a Toeplitz matrix to mimic FIFO behavior
         P_start = 0
+        # original trial's length
         self.L = L
 
-        # NOTE: only needs to overlap the previous segment by the size of the G-1 to mimic prefilled FIFOs to retain same state as if processed continuously
-        if self.subsegment_size > 0:
-            # Splits into defined length subsegments
-            # NOTE: subsegments must overlap by G-1 to continue from the same internal state (first G-1 predictions in subsegments other than first will be discarded)
-            temp = (L-self.subsegment_size)%(self.subsegment_size-self.G)
+        if self.subsegment_size:
+            # Splits into a number of defined length subsegments divisible by the `world_size`
+            # number of samples outside of evenly split chunks of selected size
+            temp1 = (L-self.subsegment_size)%(self.subsegment_size-self.G)
+            # number of segments outside of evenly split GPUs
+            temp2 = (((L-self.G-temp1)//(self.subsegment_size-self.G))+1)%self.world_size
 
-            # (temp = 0 - trial splits perfectly, temp < 0 - trial shorter than S, temp > 0 - padding needed to perfectly split)
-            P_end = 0 if temp == 0 else (self.subsegment_size-self.G-temp)
+            # NOTE: not safe for case temp1 < 0 (trial shorter than S)
+            P_end = (0 if temp1==0 else (self.subsegment_size-self.G-temp1)) + \
+                    (0 if temp2 ==0 else (self.subsegment_size-self.G)*(self.world_size-temp2))
+            
+            # temp1 == 0 (trial splits perfectly), temp1 > 0 (padding required to split trial perfectly), temp1 < 0 (trial shorter than requested segment size)
+            # temp2 == 0 (subsegments split perfectly across GPUs), temp2 > 0 (subsegments split perfectly across GPUs), temp2 < 0 (not accounted)
 
             self.P_end = P_end
         else:
-            # Splits evenly across available GPUs
-            # NOTE: subsegments must overlap by G-1 to continue from the same internal state (first G-1 predictions in subsegments other than first will be discarded)
+            # Splits evenly across the `world_size`
             temp = (L-(self.world_size-1)*(self.G-1))%self.world_size
-            # (temp = 0 - trial splits perfectly, temp < 0 - trial shorter than S, temp > 0 - padding needed to perfectly split)
+            # temp == 0 (trial splits perfectly), temp < 0 (trial shorter than requested segment size), temp > 0 (padding needed to perfectly split)
             P_end = 0 if temp == 0 else (self.world_size-temp)
 
             self.S = ((L+P_end-(self.world_size-1)*(self.G-1))//self.world_size)+(0 if self.world_size==1 else self.G-1)
@@ -57,14 +60,15 @@ class BufferSegment(Segment):
         return 0, 0
 
     def get_segment(self, captures, labels):
-        if self.subsegment_size > 0:
+        if self.subsegment_size:
             num_segments = ((self.L+self.P_end-self.subsegment_size)//(self.subsegment_size-self.G))+1
+
             data = captures.unfold(2,self.subsegment_size,self.subsegment_size-self.G).permute(0,2,1,4,3).contiguous().view(num_segments,self.C,self.subsegment_size,self.V)
 
-            for i in range(num_segments):
+            for i in range(0, num_segments, self.world_size):
                 yield \
-                    data[i:i+1], \
-                    labels[:,0 if i==0 else self.subsegment_size+(self.subsegment_size-self.G)*(i-1):self.subsegment_size+(self.subsegment_size-self.G)*i if i < num_segments-1 else self.L], \
+                    data[i:i+self.world_size], \
+                    labels[:,0 if i==0 else self.subsegment_size+(self.subsegment_size-self.G)*(i-1):self.subsegment_size+(self.subsegment_size-self.G)*(i+self.world_size) if i+self.world_size < num_segments-1 else self.L], \
                     num_segments
         else:
             return \
@@ -77,7 +81,7 @@ class BufferSegment(Segment):
             yield captures[:,:,i:i+1]
 
     def mask_segment(self, i, num_segments, L, P_start, P_end, predictions):
-        if self.subsegment_size > 0:
+        if self.subsegment_size:
             if i == 0:
                 return predictions
             elif i > 0 and i<(num_segments-1):
@@ -106,7 +110,6 @@ class WindowSegment(Segment):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # TODO: provide reduced temporal resolution case
-        # window size
         self.W = kwargs['receptive_field']
         self.subsegment_size = kwargs['segment']
 
