@@ -9,7 +9,7 @@ class Loss:
     def __init__(self, rank, class_dist, output_type='logits'):
         if output_type=='logits':
             self.foo = lambda x: x
-            self.bar = lambda x: F.softmax(x, dim=1)
+            self.bar = lambda x: F.log_softmax(x, dim=1)
         elif output_type=='logsoftmax':
             self.foo = lambda x: x
             self.bar = lambda x: torch.exp(x)
@@ -25,7 +25,7 @@ class Loss:
     def __call__(self, i, predictions, ground_truth):        
         # CE + MSE loss metric tuning is taken from @BenjaminFiltjens's MS-GCN:
         # NOTE: subsegments have an overlap of 1 in outputs to enable correct MSE calculation, CE calculation should avoid double counting that frame
-        ce = self.ce(self.foo(predictions)[:,:,1 if i!=0 else 0:], ground_truth)
+        ce = self.ce(self.foo(predictions if i==0 else predictions[:,:,1:]), ground_truth)
 
         predictions = self.bar(predictions)
         # in the reduced temporal resolution setting of the original model, MSE loss is expected to be large the higher
@@ -52,8 +52,3 @@ class LossMultiStage(Loss):
             mse_tot += mse
 
         return ce_tot, mse_tot
-    
-
-class LossOneToOneMultiStage(LossMultiStage):
-    def __call__(self, i, predictions, ground_truth):
-        return super().__call__(0, predictions, ground_truth)

@@ -41,10 +41,8 @@ class EditScore(Metric):
         self.metric = torch.zeros(self.num_trials, 1, device=self.rank, dtype=torch.float32)
         return None
 
-    def reduce(self, dst):
+    def reduce(self):
         self.metric = self.metric.mean(dim=0)
-        super().reduce(dst)
-        self.metric /= self.world_size
         return None
 
     def save(self, save_dir, suffix):

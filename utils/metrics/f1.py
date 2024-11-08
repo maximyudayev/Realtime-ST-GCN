@@ -6,8 +6,8 @@ import pandas as pd
 class F1Score(Metric):
     """Computes segmental F1@k score with an IoU threshold, proposed by Lea, et al. (2016)."""
 
-    def __init__(self, rank, world_size, num_classes, overlap):
-        super().__init__(rank, world_size, num_classes)
+    def __init__(self, rank, num_classes, overlap):
+        super().__init__(rank, num_classes)
         self.overlap = torch.tensor(overlap, device=self.rank, dtype=torch.float32)
 
     def __call__(
@@ -67,11 +67,9 @@ class F1Score(Metric):
         self.metric = torch.zeros(self.num_trials, self.overlap.size(0), device=self.rank, dtype=torch.float32)
         return None
 
-    def reduce(self, dst):
+    def reduce(self):
         # discard NaN F1 values and compute the macro F1-score (average)
         self.metric = self.metric.nan_to_num(0).mean(dim=0)
-        super().reduce(dst)
-        self.metric /= self.world_size
         return None
 
     def save(self, save_dir, suffix):

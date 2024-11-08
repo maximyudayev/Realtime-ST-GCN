@@ -3,22 +3,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.stgcn import Model as Stgcn
 from models.mstcn.mstcn import SingleStage as MsTcnStage
+from torch.nn import DataParallel as DP
+
 
 class Model(nn.Module):
     """
     """
 
-    def __init__(self, rank, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__()
 
         self.stages = kwargs['stages']
         self.num_classes = kwargs['num_classes']
-        self.segment = kwargs['segment']
-        self.rank = rank
 
         conf = kwargs['ms-tcn']
 
-        self.generator_stage = Stgcn(rank, **kwargs)
+        self.generator_stage = Stgcn(**kwargs)
 
         self.refinement_stages = nn.ModuleList([
             MsTcnStage(
@@ -28,7 +28,6 @@ class Model(nn.Module):
                 num_layers=conf['layers'][i],
                 kernel=conf['kernel'][i],
                 dropout=conf['dropout'][i]) for i in range(conf['stages'])])
-        
         if kwargs['refine']=='logits':
             self.probability = lambda x: x
         elif kwargs['refine']=='logsoftmax':
@@ -43,13 +42,19 @@ class Model(nn.Module):
         elif kwargs['output_type']=='softmax':
             self.out = lambda x: F.softmax(x, dim=1)
 
+        if torch.cuda.device_count() > 1:
+            self.generator_stage = DP(self.generator_stage)
+
 
     def forward(self, x):
-        outputs = torch.zeros(self.stages, 1, self.num_classes, self.segment, device=self.rank)
+        N,_,_,_ = x.size()
+        device = x.get_device()
+
+        outputs = torch.zeros(self.stages, 1, self.num_classes, N, device=device)
 
         x = self.generator_stage(x)
         # (N,C,1) -> (1,C,L,1) | N=L
-        x = x.permute(2,1,0,3)
+        x = x.view(1, N, self.num_classes, 1).permute(0,2,1,3)
         outputs[0] = self.out(x[:,:,:,0])
 
         for i, stage in enumerate(self.refinement_stages):

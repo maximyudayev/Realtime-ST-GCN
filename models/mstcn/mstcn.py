@@ -6,7 +6,6 @@ import torch.nn.functional as F
 class Model(nn.Module):
     def __init__(
         self,
-        rank,
         **kwargs):
 
         super().__init__()
@@ -14,8 +13,6 @@ class Model(nn.Module):
         conf = kwargs['ms-tcn']
         self.stages = conf['stages']
         self.num_classes = kwargs['num_classes']
-        self.segment = kwargs['segment']
-        self.rank = rank
 
         self.generator_stage = SingleStage(
                 in_channels=conf['in_feat'],
@@ -49,8 +46,11 @@ class Model(nn.Module):
 
 
     def forward(self, x):
+        _,_,L,_ = x.size()
+        device = x.get_device()
+
         # NOTE: original implementation passes probabilities to refinement stages, not logits
-        outputs = torch.zeros(self.stages, 1, self.num_classes, self.segment, device=self.rank)
+        outputs = torch.zeros(self.stages, 1, self.num_classes, L, device=device)
         
         x = self.generator_stage(x)
         # (1,C,L,V)

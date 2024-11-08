@@ -81,3 +81,8 @@ do
 done
 ```
 -> delete all intermediate model checkpoints from all subdirectories except the last saved epoch, the final model, and all the reported CSV files, of each respective subdirectory
+
+```shell
+find test -depth -type d -empty -delete
+```
+-> delete all empty subdirectories

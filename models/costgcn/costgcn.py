@@ -42,6 +42,7 @@ class Model(nn.Module):
         spatial_kernel_size = kwargs['graph']['num_node']
         temporal_kernel_size = conf['kernel']
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
+        self.dilation = conf['dilation'][-1]
 
         self.norm_in = LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False)
 
@@ -56,6 +57,7 @@ class Model(nn.Module):
                 partitions=A.size(0),
                 num_joints=A.size(1),
                 stride=conf['stride'][i],
+                dilation=conf['dilation'][i],
                 residual=not not conf['residual'][i],
                 dropout=conf['dropout'][i],
                 normalization=kwargs['normalization'])
@@ -130,6 +132,7 @@ class StgcnLayer(nn.Module):
         partitions,
         num_joints,
         stride=1,
+        dilation=1,
         dropout=0,
         residual=True,
         normalization='LayerNorm'):
@@ -138,7 +141,16 @@ class StgcnLayer(nn.Module):
 
         assert len(kernel_size) == 2
         assert kernel_size[0] % 2 == 1
-        padding = (((kernel_size[0] - 1) // 2), 0)
+
+        self.gamma = kernel_size[0]
+        self.stride = stride
+        self.dilation = dilation
+        self.fifo_size = stride*(self.gamma-1)+1
+
+        # number of input frames, before pooling (due to strided convolution)
+        self.fifo = torch.zeros(1, out_channels, self.fifo_size, num_joints, dtype=torch.float32)
+        self.fifo_res = torch.zeros(1, out_channels, self.fifo_size, num_joints, dtype=torch.float32)
+
         self.is_residual = residual
         self.is_residual_conv = residual and not ((in_channels == out_channels) and (stride == 1))
 
@@ -155,8 +167,8 @@ class StgcnLayer(nn.Module):
                 out_channels,
                 out_channels,
                 (kernel_size[0], 1),
-                stride=(stride, 1),
-                padding=padding),
+                dilation=(stride, 1),
+                padding='valid'),
             LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.Dropout(dropout, inplace=True))
 
@@ -166,8 +178,7 @@ class StgcnLayer(nn.Module):
                 nn.Conv2d(
                     in_channels,
                     out_channels,
-                    kernel_size=1,
-                    stride=(stride, 1)),
+                    kernel_size=1),
                 LayerNorm([out_channels, 1, num_joints]) if normalization == 'LayerNorm' else nn.BatchNorm2d(out_channels, track_running_stats=False))
         else:
             self.residual = nn.Identity()
@@ -180,14 +191,21 @@ class StgcnLayer(nn.Module):
 
     def forward(self, x, A):
         # residual branch
+        # add delay and another fifo
         if not self.is_residual:
             res = self.functional_mul_zero.mul_scalar(x, 0.0)
         else:
             res = self.residual(x)
 
+        self.fifo_res = torch.cat((res, self.fifo_res[:,:,:-1]), dim=2)
+        
         # graph convolution
         x = self.gcn(x, A)
-        # temporal accumulation (but using a learnable kernel)
-        x = self.tcn(x)
 
-        return self.relu(self.functional_add.add(x, res))
+        # push data into the buffer
+        self.fifo = torch.cat((x, self.fifo[:,:,:-1]), dim=2)
+
+        # temporal accumulation (but using a learnable kernel)
+        x = self.tcn(self.fifo)
+
+        return self.relu(self.functional_add.add(x, self.fifo_res[:,:,self.gamma//2:self.gamma//2+1]))

@@ -1,12 +1,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.utils import Graph, LayerNorm
+from models.utils import Graph, LayerNorm, BatchNorm1d
 from models.stgcn.stgcn import StgcnLayer
 
 
 class Model(nn.Module):
-    def __init__(self, rank, **kwargs):
+    def __init__(self, **kwargs):
 
         super(Model, self).__init__()
 
@@ -22,20 +22,17 @@ class Model(nn.Module):
         spatial_kernel_size = kwargs['graph']['num_node']
         temporal_kernel_size = conf['kernel']
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
-        
-        self.segment = kwargs['segment']
+
         self.num_classes = kwargs['num_classes']
-        self.rank = rank
 
         self.streams = nn.ModuleList([nn.ModuleDict({
-            "norm_in": LayerNorm([kwargs['in_feat'], 1, A.size(1)]),
+            "norm_in": LayerNorm([kwargs['in_feat'], 1, A.size(1)]) if kwargs['normalization'] == 'LayerNorm' else BatchNorm1d(kwargs['in_feat'] * A.size(1), track_running_stats=False),
             "fcn_in": nn.Conv2d(
-                in_channels=conf['in_feat'], 
-                out_channels=conf['in_ch'][0], 
+                in_channels=conf['in_feat'],
+                out_channels=conf['in_ch'][0],
                 kernel_size=1),
             "gcn_networks": nn.ModuleList([
                 AgcnLayer(
-                    rank=rank,
                     in_channels=conf['in_ch'][i],
                     out_channels=conf['out_ch'][i],
                     kernel_size=kernel_size,
@@ -44,9 +41,7 @@ class Model(nn.Module):
                     residual=not not conf['residual'][i],
                     dropout=conf['dropout'][i],
                     num_joints=kwargs['graph']['num_node'],
-                    importance=conf['importance'],
-                    segment=kwargs['segment'],
-                    receptive_field=kwargs['receptive_field'])
+                    normalization=kwargs['normalization'])
                 for i in range(conf['layers'])]),
             "fcn_out": nn.Conv2d(
                 in_channels=conf['out_ch'][-1],
@@ -63,9 +58,6 @@ class Model(nn.Module):
 
 
     def forward(self, x_joint):
-        # placeholder for model's output between two streams
-        output = torch.zeros(self.segment, self.num_classes, 1, device=self.rank)
-
         # turns joint coordinates into bone coordinate vectors, pointing from source to target joint
         # gets the "far" immediately-connected joints per each joint (row)
         A_far = self.graph.get_adjacency_raw()[2].astype(bool)
@@ -76,57 +68,56 @@ class Model(nn.Module):
             x_bone[:,:,:,A_far[i]] = x_joint[:,:,:,A_far[i]] - x_joint[:,:,:,i,None]
 
         # pass both streams through the coresponding branch and add prediction probabilities
-        for data, modules in zip((x_joint, x_bone), self.streams):
-            # normalize inputs
-            data = modules['norm_in'](data)
+        x_joint = self.streams[0]['norm_in'](x_joint)
+        # remap the features to the network size
+        x_joint = self.streams[0]['fcn_in'](x_joint)
+        # forward pass through GCN layers
+        for gcn in self.streams[0]['gcn_networks']:
+            x_joint = gcn(x_joint, self.A)
+        # global pooling (across time L, and nodes V)
+        x_joint = F.avg_pool2d(x_joint, x_joint.size()[2:])
+        # prediction
+        x_joint = self.streams[0]['fcn_out'](x_joint)
 
-            # remap the features to the network size
-            data = modules['fcn_in'](data)
-            
-            # forward pass through GCN layers
-            for gcn in modules['gcn_networks']:
-                data = gcn(data, self.A)
-            
-            # global pooling (across time L, and nodes V)
-            data = F.avg_pool2d(data, data.size()[2:])
+        # pass both streams through the coresponding branch and add prediction probabilities
+        x_bone = self.streams[1]['norm_in'](x_bone)
+        # remap the features to the network size
+        x_bone = self.streams[1]['fcn_in'](x_bone)
+        # forward pass through GCN layers
+        for gcn in self.streams[1]['gcn_networks']:
+            x_bone = gcn(x_bone, self.A)
+        # global pooling (across time L, and nodes V)
+        x_bone = F.avg_pool2d(x_bone, x_bone.size()[2:])
+        # prediction
+        x_bone = self.streams[1]['fcn_out'](x_bone)
 
-            # prediction
-            data = modules['fcn_out'](data)
-
-            # NOTE: original 2s-AGCN sums probabilities of both streams, not logits
-            output += self.probability(data.squeeze(-1))
-
-        return output
+        # NOTE: original 2s-AGCN sums probabilities of both streams, not logits
+        return self.probability(x_bone.squeeze(-1)) + self.probability(x_joint.squeeze(-1))
 
 
 class AgcnLayer(nn.Module):
     def __init__(
-        self, 
-        rank,
-        in_channels, 
-        out_channels, 
-        kernel_size, 
-        partitions, 
-        stride, 
-        residual, 
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        partitions,
+        stride,
+        residual,
         dropout,
         num_joints,
-        importance,
-        segment,
-        receptive_field):
+        normalization='LayerNorm'):
 
         super(AgcnLayer, self).__init__()
 
         coeff_embedding = 4
 
         self.embedding_channels = out_channels//coeff_embedding
-        self.segment = segment
-        self.receptive_field = receptive_field
         self.partitions = partitions
         self.num_joints = num_joints
 
         # fully-learnable adjacency matrix B, initialized as 0's
-        self.B = nn.Parameter(torch.zeros(partitions, num_joints, num_joints, device=rank), requires_grad=True) if importance else 1
+        self.B = nn.Parameter(torch.zeros(partitions, num_joints, num_joints), requires_grad=True)
 
         # self-attention adjacency matrix C, produces 2 matrices
         self.theta = nn.Conv2d(in_channels, self.embedding_channels*partitions, 1)
@@ -141,17 +132,18 @@ class AgcnLayer(nn.Module):
             num_joints=num_joints,
             stride=stride,
             dropout=dropout,
-            residual=residual)
+            residual=residual,
+            normalization=normalization)
 
 
     def forward(self, x, A):
-        L = x.size(2)
+        N,_,L,_ = x.size()
         # (N,C,L,V -> N,P,C'*L,V)
-        theta = self.theta(x).view(self.segment, self.partitions, self.embedding_channels*L, self.num_joints).permute(0,1,3,2)
-        phi = self.phi(x).view(self.segment, self.partitions, self.embedding_channels*L, self.num_joints)
+        theta = self.theta(x).view(N, self.partitions, self.embedding_channels*L, self.num_joints).permute(0,1,3,2)
+        phi = self.phi(x).view(N, self.partitions, self.embedding_channels*L, self.num_joints)
         # (N,P,V,V)
-        C = F.softmax(torch.matmul(theta,phi), dim=3)
-        
+        C = F.softmax(torch.matmul(theta, phi), dim=3)
+
         # graph convolution
         x = self.st_gcn(x, A+self.B+C)
 

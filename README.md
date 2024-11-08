@@ -8,13 +8,14 @@ Leverages [PyTorch's Distributed Data Parallel](https://pytorch.org/docs/stable/
 * consuming datasets processing data entries of which otherwise exceeds available device memory (**our trick**);
 * emulate learning with large batch sizes, where other methods were previously limited to equal-length data entries and were memory-bound for batch size (**our trick**);
 
-<!-- > **Realtime ST-GCN: Adapting for Inference at the Edge**, Maxim Yudayev, Benjamin Filtjens and Josep Balasch, TNNLS 2023. [[Arxiv Preprint]](https://arxiv.org/abs/...) -->
+> **RT-ST-GCN: Enabling Realtime Continual Inference at the Edge**, Yudayev, M., Filtjens, B., & Balasch Masoliver, J. (2024). RT-ST-GCN: Enabling Realtime Continual Inference at the Edge. In 2024 IEEE 34th International Workshop on Machine Learning for Signal Processing (MLSP). [[IEEE Xplore]](https://ieeexplore.ieee.org/document/10734754)
+
 
 ## Contributions
-1. Formalizes application of ST-GCN and its SotA derivatives to [continuous recognition](#continuous-recognition).
-2. Establishes [benchmarks](#results) on key, relevant datasets for the original unaltered ST-GCN model to compare against, and for reliable reproduction of results.
-3. Proposes a distributed [training method](#training-technique) for otherwise memory-exceeding long-sequence datasets of unequal trial durations, and enables use of any, previously impossible, desired effective batch size.
-4. Proposes a [lightweight model](#rt-st-gcn) optimization targeted at constrained embedded devices.
+1. Proposes a [lightweight model](#rt-st-gcn) optimization targeted at constrained embedded devices.
+2. Proposes a distributed [training method](#training-technique) for otherwise memory-exceeding long-sequence datasets of unequal trial durations, and enables use of any, previously impossible, desired effective batch size.
+3. Formalizes application of ST-GCN and its SotA derivatives to [continuous recognition](#continuous-recognition).
+4. Establishes [benchmarks](#results) on key, relevant datasets for the original unaltered ST-GCN model to compare against, and for reliable reproduction of results.
 
 ## TODO
 - [x] Implement ST-GCN correctly to the paper's spec (but in RT variant), using basic differentiable tensor operators and cutting out messy Modules combination (stacked GCN + TCN).
@@ -27,7 +28,7 @@ Leverages [PyTorch's Distributed Data Parallel](https://pytorch.org/docs/stable/
 - [x] Quantize the model with the 8-bit dynamic fixed-point technique.
 - [x] Compare quantized and floating-point models.
 - [x] Adapt training for [Distributed Data Parallel](https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html#torch.nn.parallel.DistributedDataParallel) for efficient multi-GPU training.
-- [ ] Adapt BN layers to our training trick to emulate learning on larger batches.
+- [x] Adapt BN layers to our training trick to emulate learning on larger batches.
 - [ ] Adapt ST-GCN for quantization to enable PTQ and QAT.
 - [ ] Benchmark quantized models.
 - [ ] Add fixed trials to the repo for benchmarking and visualization.
@@ -54,26 +55,9 @@ root/
 ├── .vscode/
 │   └── launch.json
 ├── config/
-│   ├── imu_fogit_ABCD/
-│   │   ├── original_local.json
-│   │   ├── original_vsc.json
-│   │   ├── realtime_local.json
-│   │   └── realtime_vsc.json
-│   └── pku-mmd/
-│       ├── original_local.json
-│       ├── original_vsc.json
-│       ├── realtime_local.json
-│       └── realtime_vsc.json
+│   ├── pku-mmd/
+|   ...
 ├── data/
-│   ├── imu_fogit_ABCD/
-│   │   ├── train/
-│   │   │   ├── features/
-│   │   │   └── labels/
-│   │   ├── val/
-│   │   │   ├── features/
-│   │   │   └── labels/
-│   │   ├── actions.txt
-│   │   └── split.txt
 │   ├── pku-mmd/
 │   │   ├── train/
 │   │   │   ├── features/
@@ -82,54 +66,31 @@ root/
 │   │   │   ├── features/
 │   │   │   └── labels/
 │   │   └── actions.txt
+│   ...
 │   └── skeletons/
-│       ├── imu_fogit_ABCD.json
-│       ├── openpose.json
-│       ├── ntu-rgb+d.json
-│       └── pku-mmd.json
+│       ├── pku-mmd.json
+|       ...
 ├── data_prep/
-│   ├── dataset.py
-│   └── prep.py
 ├── models/
-│   ├── original/
-│   │   └── st_gcn.py
-│   ├── proposed/
-│   │   ├── st_gcn.py
-│   │   ├── test_folding.py
-│   │   └── test_st_gcn.py
+│   ├── aagcn/
+│   ├── stgcn/
+│   ├── costgcn/
+│   ├── msgcn/
+│   ├── mstcn/
+│   ├── rtstgcn/
 │   └── utils/
-│       ├── graph.py
-│       ├── test_graph.py
-│       └── tgcn.py
+├── utils/
+│   ├── metrics/
+│   ...
 ├── pretrained_models/
-│   ├── imu_fogit_ABCD/
-│   │   ├── original/
-│   │   └── realtime/
-│   ├── pku-mmdv1/
-│   │   ├── original/
-│   │   └── realtime/
-│   ├── pku-mmdv2/
-│   │   ├── original/
-│   │   └── realtime/
+│   ├── pku-mmd/
+│   ...
 │   └── train-validation-curve.ods
 ├── tools/
-│   ├── get_data.sh
-│   └── get_models.sh
 ├── vsc/
-│   ├── experiment_original_kernel.sh
-│   ├── experiment_realtime_kernel.sh
-│   ├── st_gcn_gpu_debug_p100.slurm
-│   ├── st_gcn_gpu_train_a100.slurm
-│   ├── st_gcn_gpu_train_p100.slurm
-│   ├── st_gcn_gpu_train_v100.slurm
-│   ├── test_realtime.sh
-│   └── vsc_cheatsheet.md
 ├── .gitignore
 ├── main.py
 ├── processor.py
-├── metrics.py
-├── st_gcn_parser.py
-├── visualize.py
 ├── README.md
 ├── ISSUE_TEMPLATE.md
 └── LICENSE
@@ -204,9 +165,9 @@ High Performance Computing for heavy-duty training and testing is done at Vlaams
 #### **Local**
 Create a Conda environment with all the dependencies, and clone the repository.
 ```shell
+git clone https://github.com/maximyudayev/Realtime-ST-GCN.git
 conda create -n rt-st-gcn --file requirements.txt
 conda activate rt-st-gcn
-git clone https://github.com/maximyudayev/Realtime-ST-GCN.git
 ```
 
 #### **HPC**
@@ -217,16 +178,16 @@ Create a Conda environment identical to [Local setup](#local) or leverage optimi
 ### Data
 **PKU-MMD** data is provided by Liu et al. (2017). **FOG-IT** proprietary data is provided by Filtjens et al. (2022) and is not public. **PKU-MMDv2** used in the project was preprocessed and made compatible with the project by Filtjens et al. (2022). **PKU-MMDv1** and **FOG-IT** data was preprocessed by us using the respective function in `data_prep/prep.py`. Any new dataset can be used with the rest of the training infrastructure, but the burden of preprocessing function implementation in `data_prep/prep.py` remains on the user (final file or directory type dataset must yield 5D tensor entries compatible with the `processor.py`).  
 
-The non-proprietary datasets can be downloaded by running the script below to fetch all or specific datasets, respectively.
+<!-- The non-proprietary datasets can be downloaded by running the script below to fetch all or specific datasets, respectively.
 ```shell
 ./tools/get_data.sh
 ```
 OR:
 ```shell
 ./tools/get_data.sh 'pku-mmd' '...'
-```
+``` -->
 
-You can also download the datasets manually and extract them into `./data` (local environment) or `$VSC_SCRATCH/rt_st_gcn/data` (VSC environment): high-bandwidth IO (access of the datasets) on VSC should be done from the Scratch partition (fast Infiniband interconnect), all else should be kept on the Data partition. **PKU-MMDv2** from Filtjens's [Github](https://github.com/BenjaminFiltjens/MS-GCN), **PKU-MMDv1** from Liu's [project page](https://www.icst.pku.edu.cn/struct/Projects/PKUMMD.html).
+You can download the datasets manually and extract them into `./data` (local environment) or `$VSC_SCRATCH/rt_st_gcn/data` (VSC environment): high-bandwidth IO (access of the datasets) on VSC should be done from the Scratch partition (fast Infiniband interconnect), all else should be kept on the Data partition. **PKU-MMDv2** from Filtjens's [Github](https://github.com/BenjaminFiltjens/MS-GCN), **PKU-MMDv1** from Liu's [project page](https://www.icst.pku.edu.cn/struct/Projects/PKUMMD.html).
 
 New datasets should match the data directory structure, provide auxiliary files (job configuration, skeleton graph, and list of actions), which are expected by the model and the automated scripts to setup and run without errors. Make sure to match these prerequisites and to pay attention to dataset-specific configurations:
 ```
@@ -268,7 +229,7 @@ New datasets should match the data directory structure, provide auxiliary files 
 ...
 ```
 
-### Pretrained Models
+<!-- ### Pretrained Models
 The ST-GCN and RT-ST-GCN models trained by us can be downloaded by running the corresponding script, specifying the dataset and model type separated by an `_`:
 ```shell
 ./tools/get_models.sh 'pku-mmd_st-gcn' 'pku-mmd_rt-st-gcn' '...'
@@ -278,46 +239,39 @@ Currently available models:
 * PKU-MMD
 * FOG-IT
 
-You can also download the models manually from [Google Drive](https://www.youtube.com/watch?v=BBJa32lCaaY) and put them into `./pretrained_models` (local environment) or `$VSC_SCRATCH/rt_st_gcn/pretrained_models` (VSC environment), for the same reason as in the [Data section](#data).
+You can also download the models manually from [Google Drive](https://www.youtube.com/watch?v=BBJa32lCaaY) and put them into `./pretrained_models` (local environment) or `$VSC_SCRATCH/rt_st_gcn/pretrained_models` (VSC environment), for the same reason as in the [Data section](#data). -->
 
 ## Functionality
 The `main.py` provides multiple functionalities from one entry-point. Elaborate description of each functionality can be obtained by `python main.py --help` and `python main.py foo --help`, where `foo` is `train`, `test` or `benchmark`.
 
 CLI arguments must be provided before specifying the configuration file (or omitting to use the default one). CLI arguments, when provided, override the configurations in the (provided) JSON configuration file.
 
-<!-- TODO: add diagram explaining working between different classes -->
-
 ### Training
+Training procedure, for each epoch, trains according to our parallel method and reports results on both, the train and test split.
+
 #### PKU-MMD
+(Co)ST-GCN ~ 3 hr/epoch (4xA100)
+RT-ST-GCN ~ 0.5 hr/epoch (4xP100)
+
 #### FOG-IT
 Original ST-GCN takes ~15 min/epoch (4xP100 GPUs).
-
 RT-ST-GCN takes ~1 min/epoch (1xP100 GPU).
 
-<!-- To train a new ST-GCN model, run
-
-```
-python main.py recognition -c config/st_gcn/<dataset>/train.yaml [--work_dir <work folder>]
-```
-where the ```<dataset>``` must be ```ntu-xsub```, ```ntu-xview``` or ```kinetics-skeleton```, depending on the dataset you want to use.
-The training results, including **model weights**, configurations and logging files, will be saved under the ```./work_dir``` by default or ```<work folder>``` if you appoint it. -->
-
 ### Testing
+Testing procedure reports performance of the model's snapshot on whichever split is provided to it.
 
 ### Benchmarking
+Benchmarking procedure converts model to the inference-only mode and measures its floating-point latency in a simulated deployment.
 
 ## Results
-<!-- 
-### Results
-The expected **Top-1** **accuracy** of provided models are shown here:
+| Model | F1 (%) | Top1 (%) | Top5 (%) | Multiply-Accumulate | Memory<sub>tot</sub> (words) | Latency<sub>fp32</sub> |
+| :------ | :------: | :------: | :------: | :------: | :------: | :------: |
+| CoST-GCN<sub>9</sub> [1] | 40.1 | 80.6 | 96.8 | 78.6 M | 4 M | 204 ms |
+| CoST-GCN<sub>69</sub> [1] | 43.3 | **81.5** | **96.9** | 468 M | 25 M | 1.351 s |
+| RT-ST-GCN<sub>9</sub> (Ours) | 30.5 | 69.3 | 89.3 | **20.1 M** | **1.3 M** | **20 ms** |
+| **RT-ST-GCN**<sub>69</sub> (Ours) | **51.2** | 67.3 | 90.3 | **20.1 M** | 5 M | **20 ms** | 
 
-| Model| Kinetics-<br>skeleton (%)|NTU RGB+D <br> Cross View (%) |NTU RGB+D <br> Cross Subject (%) |
-| :------| :------: | :------: | :------: |
-|Baseline[1]| 20.3    | 83.1     |  74.3    |
-|**ST-GCN** (Ours)| **31.6**| **88.8** | **81.6** | 
-
-[1] Kim, T. S., and Reiter, A. 2017. Interpretable 3d human action analysis with temporal convolutional networks. In BNMW CVPRW. 
---> 
+[1] Lukas Hedegaard, Negar Heidari, and Alexandros Iosifidis, “Continual spatio-temporal graph convolutional networks,” Pattern Recognition, vol. 140, pp. 109528, 2023.
 
 ## Commit Conventions
 Used commit convention: `Type(scope): message`.
@@ -335,18 +289,19 @@ Commit types:
 ## Citation
 Please cite the following paper if you use this repository in your reseach.
 ```
-@inproceedings{ ,
-  title     = { },
-  author    = { },
-  booktitle = { },
-  year      = { },
+@inproceedings{yudayev2024,
+  title     = {RT-ST-GCN: Enabling Realtime Continual Inference at the Edge},
+  author    = {Yudayev, Maxim and Filtjens, Benjamin and Balasch Masoliver, Josep},
+  journal   = {2024 IEEE 34th International Workshop on Machine Learning for Signal Processing (MLSP)},
+  year      = {2024},
+  keywords  = {STG/20/047#56124225}
 }
 ```
 
 ## Contact
 For any questions, feel free to contact
 ```
-Maxim Yudayev : maxim.yudayev@kuleuven.be
+Maxim Yudayev : <maxim(dot)yudayev(at)kuleuven(dot)be>
 ```
 
 ## Acknowledgements

@@ -9,15 +9,16 @@
         "graph": "/data/leuven/341/vsc34153/rt-st-gcn/data/skeletons/pku-mmd.json",
         "demo": [175,293,37],
         "iou_threshold": [0.1,0.25,0.5],
-        "is_ddp": true
+        "backend": "x86",
+	"checkpoint": "/scratch/leuven/341/vsc34153/rt-st-gcn/pretrained_models/pku-mmdv1/train_20-12-23-20:14:33_pkummd_rtstgcn_bn/epoch-97.pt"
     },
     "arch": {
         "strategy": "spatial",
-        "segment": 1000,
         "in_feat": 3,
         "stages": 1,
         "kernel": 9,
         "output_type": "logits",
+        "normalization": "BatchNorm",
         "rt-st-gcn": {
             "latency": false,
             "importance": true,
@@ -35,7 +36,7 @@
     },
     "optimizer": {
         "seed": 1538574472,
-        "epochs": 50,
+        "epochs": 100,
         "checkpoint_indices": [
             0,1,2,3,4,5,6,7,8,9,
             10,11,12,13,14,15,16,17,18,19,
@@ -49,7 +50,7 @@
             90,91,92,93,94,95,96,97,98],
         "learning_rate": 0.0005,
         "learning_rate_decay": 1.0,
-        "batch_size": 16
+        "batch_size": 64
     },
     "job": {
         "email": "maxim.yudayev@kuleuven.be",

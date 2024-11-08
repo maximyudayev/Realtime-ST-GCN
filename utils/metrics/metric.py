@@ -1,14 +1,12 @@
 import torch
-from torch.distributed import reduce
 
 
 class Metric:
     """Base class for metrics to capture."""
 
-    def __init__(self, rank, world_size, num_classes):
+    def __init__(self, rank, num_classes):
         self.num_classes = num_classes
         self.rank = rank
-        self.world_size = world_size
 
     def __call__(self):
         self.trial_id += 1
@@ -38,9 +36,7 @@ class Metric:
     def value(self):
         return self.metric
 
-    def reduce(self, dst):
-        if dst is not None:
-            reduce(self.metric, dst=dst, op=torch.distributed.ReduceOp.SUM)
+    def reduce(self):
         return None
 
     def save(self, save_dir, suffix):

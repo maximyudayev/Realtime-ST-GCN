@@ -1,5 +1,4 @@
 import torch
-import torch.multiprocessing as mp
 
 from processor import Processor, setup, cleanup
 from models import MODELS
@@ -61,12 +60,10 @@ def train(rank, world_size, args):
     model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args)
 
     # list metrics that Processor should record
-    metric_rank = rank if args.processor['is_ddp'] or not torch.cuda.is_available() else torch.device("cuda:0")
-    metric_world_size = world_size if args.processor['is_ddp'] and torch.cuda.is_available() else 1
     metrics = [
-        F1Score(metric_rank, metric_world_size, args.arch['num_classes'], args.processor['iou_threshold']),
-        EditScore(metric_rank, metric_world_size, args.arch['num_classes']),
-        ConfusionMatrix(metric_rank, metric_world_size, args.arch['num_classes'])]
+        F1Score(rank, args.arch['num_classes'], args.processor['iou_threshold']),
+        EditScore(rank, args.arch['num_classes']),
+        ConfusionMatrix(rank, args.arch['num_classes'])]
 
     # construct a processing wrapper
     processor = Processor(rank, world_size, model, loss, statistics, segment_generator, metrics)
@@ -80,25 +77,24 @@ def train(rank, world_size, args):
         optim_conf=args.optimizer,
         job_conf=args.job)
 
-    if rank == 0 or not torch.cuda.is_available() or not args.processor['is_ddp']:
-        # copy over resulting files of interest into the $VSC_DATA persistent storage
-        if args.processor.get('backup'):
-            for f in [
-                'accuracy-curve.csv',
-                'train-validation-curve.csv',
-                'final.pt',
-                'macro-F1@k.csv',
-                'accuracy.csv',
-                'edit.csv',
-                'confusion-matrix.csv',
-                *['segmentation-{0}.csv'.format(i) for i in args.processor['demo']]]:
-                os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
+    # copy over resulting files of interest into the $VSC_DATA persistent storage
+    if args.processor.get('backup'):
+        for f in [
+            'accuracy-curve.csv',
+            'train-validation-curve.csv',
+            'final.pt',
+            'macro-F1@k.csv',
+            'accuracy.csv',
+            'edit.csv',
+            'confusion-matrix.csv',
+            *['segmentation-{0}.csv'.format(i) for i in args.processor['demo']]]:
+            os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
 
-        os.system(
-            'mail -s "[{0}]: COMPLETED" {1} <<< ""'
-            .format(
-                args.job['jobname'],
-                args.job['email']))
+    os.system(
+        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
+        .format(
+            args.job['jobname'],
+            args.job['email']))
 
     # perform common cleanup
     cleanup(args)
@@ -128,9 +124,9 @@ def test(rank, world_size, args):
 
     # list metrics that Processor should record
     metrics = [
-        F1Score(rank, world_size, args.arch['num_classes'], args.processor['iou_threshold']),
-        EditScore(rank, world_size, args.arch['num_classes']),
-        ConfusionMatrix(rank, world_size, args.arch['num_classes'])]
+        F1Score(rank, args.arch['num_classes'], args.processor['iou_threshold']),
+        EditScore(rank, args.arch['num_classes']),
+        ConfusionMatrix(rank, args.arch['num_classes'])]
 
     # construct a processing wrapper
     processor = Processor(rank, world_size, model, loss, statistics, segment_generator, metrics)
@@ -141,22 +137,21 @@ def test(rank, world_size, args):
         proc_conf=args.processor,
         job_conf=args.job)
 
-    if rank == 0 or not torch.cuda.is_available() or not args.processor['is_ddp']:
-        # copy over resulting files of interest into the $VSC_DATA persistent storage
-        if args.processor.get('backup'):
-            for f in [
-                'macro-F1@k.csv',
-                'accuracy.csv',
-                'edit.csv',
-                'confusion-matrix.csv',
-                *['segmentation-{0}.csv'.format(i) for i in args.processor['demo']]]:
-                os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
+    # copy over resulting files of interest into the $VSC_DATA persistent storage
+    if args.processor.get('backup'):
+        for f in [
+            'macro-F1@k.csv',
+            'accuracy.csv',
+            'edit.csv',
+            'confusion-matrix.csv',
+            *['segmentation-{0}.csv'.format(i) for i in args.processor['demo']]]:
+            os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
 
-        os.system(
-            'mail -s "[{0}]: COMPLETED" {1} <<< ""'
-            .format(
-                args.job['jobname'],
-                args.job['email']))
+    os.system(
+        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
+        .format(
+            args.job['jobname'],
+            args.job['email']))
 
     # perform common cleanup
     cleanup(args)
@@ -186,16 +181,11 @@ def benchmark(rank, world_size, args):
     # perform common setup around the model's black box
     model, loss, segment_generator, statistics, train_dataloader, val_dataloader, args = setup(Model, Loss, SegmentGenerator, Statistics, rank, world_size, args)
 
-    # get custom quantization details if the model needs any
-    # maps custom quantization replacement modules
-    args.arch.prepare_dict = model.prepare_dict()
-    args.arch.convert_dict = model.convert_dict()
-
     # list metrics that Processor should record
     metrics = [
-        F1Score(rank, world_size, args.arch['num_classes'], args.processor['iou_threshold']),
-        EditScore(rank, world_size, args.arch['num_classes']),
-        ConfusionMatrix(rank, world_size, args.arch['num_classes'])]
+        F1Score(rank, args.arch['num_classes'], args.processor['iou_threshold']),
+        EditScore(rank, args.arch['num_classes']),
+        ConfusionMatrix(rank, args.arch['num_classes'])]
 
     # construct a processing wrapper
     processor = Processor(rank, world_size, model, loss, statistics, segment_generator, metrics)
@@ -207,26 +197,25 @@ def benchmark(rank, world_size, args):
         arch_conf=args.arch,
         job_conf=args.job)
 
-    if rank == 0 or not torch.cuda.is_available() or not args.processor['is_ddp']:
-        if args.processor.get('backup'):
-            for f in [
-                'accuracy.csv',
-                'loss.csv',
-                'macro-F1@k.csv',
-                'edit.csv',
-                'latency.csv',
-                'model-size.csv',
-                'confusion-matrix_fp32.csv',
-                'confusion-matrix_int8.csv',
-                *['segmentation-{0}_fp32.csv'.format(i) for i in args.processor['demo']],
-                *['segmentation-{0}_int8.csv'.format(i) for i in args.processor['demo']]]:
-                os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
+    if args.processor.get('backup'):
+        for f in [
+            'accuracy.csv',
+            'loss.csv',
+            'macro-F1@k.csv',
+            'edit.csv',
+            'latency.csv',
+            'model-size.csv',
+            'confusion-matrix_fp32.csv',
+            'confusion-matrix_int8.csv',
+            *['segmentation-{0}_fp32.csv'.format(i) for i in args.processor['demo']],
+            *['segmentation-{0}_int8.csv'.format(i) for i in args.processor['demo']]]:
+            os.system('cp {0}/{1} {2}'.format(args.processor['save_dir'], f, args.processor['backup_dir']))
 
-        os.system(
-            'mail -s "[{0}]: COMPLETED" {1} <<< ""'
-            .format(
-                args.job['jobname'],
-                args.job['email']))
+    os.system(
+        'mail -s "[{0}]: COMPLETED" {1} <<< ""'
+        .format(
+            args.job['jobname'],
+            args.job['email']))
 
     # perform common cleanup
     cleanup(args)
@@ -241,20 +230,15 @@ def main(args):
     assert_parameters(args)
 
     # setting up random number generator for deterministic and meaningful benchmarking
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    world_size = torch.cuda.device_count()
     random.seed(args.optimizer['seed'])
     torch.manual_seed(args.optimizer['seed'])
     torch.cuda.manual_seed_all(args.optimizer['seed'])
     torch.backends.cudnn.deterministic = True
 
     # enter the appropriate command
-
-    # will use all available GPUs for DistributedDataParallel model and spawn K processes, 1 for each GPU
-    # otherwise will run as a CPU model
-    if torch.cuda.is_available() and args.processor['is_ddp']:
-        world_size = torch.cuda.device_count()
-        mp.spawn(args.func, args=(world_size, args), nprocs=world_size)
-    else:
-        args.func(None, None, args)
+    args.func(device, (1 if world_size in [None, 0] else world_size), args)
 
     return None
 

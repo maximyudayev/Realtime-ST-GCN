@@ -26,7 +26,8 @@ def plot_segmentation_masks():
         'pretrained_models/pku-mmdv1/rtstgcn',
         'pretrained_models/pku-mmdv1/aagcn',
         'pretrained_models/pku-mmdv1/mstcn',
-        'pretrained_models/pku-mmdv1/msgcn']
+        'pretrained_models/pku-mmdv1/msgcn'
+        ]
 
     for i in range(len(trials)):
         with open('{0}/segmentation-{1}.csv'.format(paths[0],trials[i]),'r') as f:
@@ -47,11 +48,19 @@ def plot_segmentation_masks():
             'RT-ST-GCN',
             '2s-AGCN',
             'MS-TCN',
-            'MS-GCN']
+            'MS-GCN'
+            ]
 
         axs[i].imshow(np.concatenate((mask_label, mask_prediction), axis=0), cmap='terrain_r', vmin=0.0, vmax=51.0, aspect='auto', interpolation='nearest')
         # axs[i].set_ylabel(letters[i], rotation=0, fontsize='xx-large', fontweight='bold')
-        axs[i].set_yticks([0.0, 1.0, 2.0, 3.0, 4.0, 5.0], labels=labels, fontsize='x-large')
+        axs[i].set_yticks([
+            0.0,
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0
+            ], labels=labels, fontsize='x-large')
         axs[i].tick_params(length=0.0)
         axs[i].set_frame_on(False)
 

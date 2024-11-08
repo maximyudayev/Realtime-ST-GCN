@@ -1,13 +1,14 @@
 from .config_parser import Parser
-from .loss import Loss, LossMultiStage, LossOneToOneMultiStage
+from .loss import Loss, LossMultiStage
 from .segment_generator import BufferSegment, WindowSegment, WindowSegmentMultiStage, WindowSegmentOneToOneMultiStage
-from .statistics import Statistics, StatisticsMultiStage, StatisticsOneToOneMultiStage
+from .statistics import Statistics, StatisticsMultiStage
 
 
 LOSS = {
     'st-gcn': Loss,
+    'co-st-gcn': Loss,
     'rt-st-gcn': Loss,
-    'ms-tcn': LossOneToOneMultiStage,
+    'ms-tcn': LossMultiStage,
     'ms-gcn': LossMultiStage,
     'aa-gcn': Loss,
     'shift-gcn': Loss,
@@ -16,6 +17,7 @@ LOSS = {
 
 SEGMENT_GENERATOR = {
     'st-gcn': WindowSegment,
+    'co-st-gcn': BufferSegment,
     'rt-st-gcn': BufferSegment,
     'ms-tcn': WindowSegmentOneToOneMultiStage,
     'ms-gcn': WindowSegmentMultiStage,
@@ -26,8 +28,9 @@ SEGMENT_GENERATOR = {
 
 STATISTICS = {
     'st-gcn': Statistics,
+    'co-st-gcn': Statistics,
     'rt-st-gcn': Statistics,
-    'ms-tcn': StatisticsOneToOneMultiStage,
+    'ms-tcn': StatisticsMultiStage,
     'ms-gcn': StatisticsMultiStage,
     'aa-gcn': Statistics,
     'shift-gcn': Statistics,

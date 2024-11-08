@@ -3,19 +3,19 @@
     "configurations": [
         {
             "name": "PKU-MMDv1 Train",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
                 "train",
                 "--config",
-                "config/pku-mmd/as_is/mstcn_local.json",
+                "config/pku-mmd/ln/rtstgcn_local.json",
             ]
         },
         {
             "name": "Debug Current File",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
